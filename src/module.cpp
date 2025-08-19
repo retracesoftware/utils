@@ -205,6 +205,8 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::StableSet_Type,
         &retracesoftware::StableFrozenSet_Type,
 
+        &retracesoftware::FastSet_Type,
+        &retracesoftware::InstanceCheck_Type,
         NULL
     };
 

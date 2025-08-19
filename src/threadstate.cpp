@@ -242,6 +242,7 @@ namespace retracesoftware {
         int desired_state;
         int previous_state;
 
+
         static PyObject* enter(ThreadStateContext* self, PyObject* Py_UNUSED(args)) {
 
             self->previous_state = ThreadState_GetIndex(self->thread_state);
@@ -544,6 +545,33 @@ namespace retracesoftware {
             return index >= 0 ? Py_NewRef(PyTuple_GetItem(self->predicates, index)) : nullptr;
         }
 
+        static PyObject * set_dispatch(ThreadState * self, PyObject * args, PyObject *kwds) {
+            if (!kwds) {
+                Py_RETURN_NONE;
+            }
+
+            if (PyTuple_Size(args) != 1) {
+                PyErr_Format(PyExc_TypeError, "dispatch takes the dispatch object as the only positional arguemnt");
+                return nullptr;
+            }
+            if (!PyObject_TypeCheck(PyTuple_GET_ITEM(args, 0), &Dispatch_Type)) {
+                PyErr_Format(PyExc_TypeError, "dispatch parameter not of Dispatch type");
+                return nullptr;
+            }
+
+            Dispatch * dispatch = reinterpret_cast<Dispatch *>(PyTuple_GET_ITEM(args, 0));
+
+            for (int i = 0; i < PyTuple_GET_SIZE(self->avaliable_states); i++) {
+                PyObject * key = PyTuple_GET_ITEM(self->avaliable_states, i);
+
+                if (PyDict_Contains(kwds, key)) {
+                    Py_DECREF(dispatch->handlers()[i]);
+                    dispatch->handlers()[i] = Py_NewRef(PyDict_GetItem(kwds, key));
+                }
+            }
+            Py_RETURN_NONE;
+        }
+        
         static PyObject * dispatch(ThreadState * self, PyObject * args, PyObject *kwds) {
             if (PyTuple_Size(args) > 1) {
                 PyErr_Format(PyExc_TypeError, "dispatch takes a single optional positional arguemnt, the default dispatch");
@@ -562,10 +590,10 @@ namespace retracesoftware {
             for (int i = 0; i < PyTuple_GET_SIZE(self->avaliable_states); i++) {
                 PyObject * key = PyTuple_GET_ITEM(self->avaliable_states, i);
 
-                PyObject * val = PyDict_GetItem(kwds, key);
+                PyObject * val = kwds ? PyDict_GetItem(kwds, key) : nullptr;
 
                 if (val) {
-                    dispatch->handlers()[i] = Py_XNewRef(val);    
+                    dispatch->handlers()[i] = Py_XNewRef(val);
                 } else {
                     if (PyErr_Occurred()) {
                         Py_DECREF(dispatch);
@@ -626,6 +654,7 @@ namespace retracesoftware {
         {"predicate", (PyCFunction)ThreadState::predicate, METH_O, "Set the thread-local target"},
         {"wrap", (PyCFunction)ThreadState::wrap, METH_VARARGS | METH_KEYWORDS, "Set the thread-local target"},
         {"dispatch", (PyCFunction)ThreadState::dispatch, METH_VARARGS | METH_KEYWORDS, "Set the thread-local target"},
+        {"set_dispatch", (PyCFunction)ThreadState::set_dispatch, METH_VARARGS | METH_KEYWORDS, "Set the thread-local target"},
         {NULL, NULL, 0, NULL}
     };
 

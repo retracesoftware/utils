@@ -33,6 +33,9 @@ namespace retracesoftware {
     extern PyTypeObject StableFrozenSet_Type;
     extern PyTypeObject StableSetIterator_Type;
 
+    extern PyTypeObject FastSet_Type;
+    extern PyTypeObject InstanceCheck_Type;
+
     void force_full_gc(void);
 
     // PyObject * create_proxy(PyTypeObject * proxytype, PyObject * handler, PyObject * target);

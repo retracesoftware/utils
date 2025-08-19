@@ -12,7 +12,9 @@ py.extension_module(
    'src/demux.cpp',
    'src/threadstate.cpp',
    'src/striptraceback.cpp',
-   'src/stacktrace.cpp'],
+   'src/stacktrace.cpp',
+   'src/fastset.cpp',
+   'src/instancecheck.cpp'],
   install: true,
 
   # If you want extra flags:
