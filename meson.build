@@ -14,7 +14,13 @@ py.extension_module(
    'src/striptraceback.cpp',
    'src/stacktrace.cpp',
    'src/fastset.cpp',
-   'src/instancecheck.cpp'],
+   'src/instancecheck.cpp',
+   'src/visitor.cpp',
+   'src/wrapped.cpp',
+   'src/methoddescriptorproxy.cpp',
+   'src/reference.cpp',
+   'src/threadwatcher.cpp'
+   ],
   install: true,
 
   # If you want extra flags:

@@ -1,35 +1,35 @@
 #include "utils.h"
 #include <signal.h>
 
-static PyObject * set_type(PyObject * self, PyObject * args, PyObject *kwds) {
+// static PyObject * set_type(PyObject * self, PyObject * args, PyObject *kwds) {
 
-    PyTypeObject * new_type;
-    PyObject * obj;
+//     PyTypeObject * new_type;
+//     PyObject * obj;
 
-    static const char *kwlist[] = {"obj", "type", NULL};  // List of keyword
+//     static const char *kwlist[] = {"obj", "type", NULL};  // List of keyword
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO!", (char **)kwlist, &obj, &PyType_Type, &new_type)) {
-        return NULL;
-    }
+//     if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO!", (char **)kwlist, &obj, &PyType_Type, &new_type)) {
+//         return NULL;
+//     }
 
-    if (!PyType_IsSubtype(new_type, Py_TYPE(obj))) {
-        PyErr_Format(PyExc_TypeError, "Cannot set type of object: %S to type: %S as not a subtype of object type: %S",
-            obj, (PyObject *)new_type, Py_TYPE(obj));
-        return nullptr;
-    }
+//     if (!PyType_IsSubtype(new_type, Py_TYPE(obj))) {
+//         PyErr_Format(PyExc_TypeError, "Cannot set type of object: %S to type: %S as not a subtype of object type: %S",
+//             obj, (PyObject *)new_type, Py_TYPE(obj));
+//         return nullptr;
+//     }
 
-    if (new_type->tp_basicsize != Py_TYPE(obj)->tp_basicsize) {
-        PyErr_Format(PyExc_TypeError, "Cannot set type of object: %S to type: %S as memory layout differs",
-            obj, (PyObject *)new_type);
-        return nullptr;
-    }
+//     if (new_type->tp_basicsize != Py_TYPE(obj)->tp_basicsize) {
+//         PyErr_Format(PyExc_TypeError, "Cannot set type of object: %S to type: %S as memory layout differs",
+//             obj, (PyObject *)new_type);
+//         return nullptr;
+//     }
 
-    Py_DECREF(Py_TYPE(obj));
-    Py_INCREF(new_type);
-    Py_SET_TYPE(obj, new_type);
+//     Py_DECREF(Py_TYPE(obj));
+//     Py_INCREF(new_type);
+//     Py_SET_TYPE(obj, new_type);
 
-    Py_RETURN_NONE;
-}
+//     Py_RETURN_NONE;
+// }
 
 static PyObject * noop(PyObject *module, PyObject * const * args, size_t nargs, PyObject* kwnames) {
     Py_RETURN_NONE;
@@ -118,7 +118,138 @@ static PyObject* get_hashseed(PyObject* self, PyObject* args) {
     return PyLong_FromLong(_Py_HashSecret.expat.hashsalt);
 }
 
+static PyObject* try_unwrap(PyObject* self, PyObject* arg) {
+    return Py_NewRef(PyObject_TypeCheck(arg, &retracesoftware::Wrapped_Type)
+        ? retracesoftware::Wrapped_Target(arg)
+        : arg);
+}
+
+static PyObject* unwrap(PyObject* self, PyObject* arg) {
+    if (!PyObject_TypeCheck(arg, &retracesoftware::Wrapped_Type)) {
+        PyErr_Format(PyExc_TypeError, "Cannot unwrap: %S as it is not wrapped", arg);
+        return nullptr;
+    }
+    return retracesoftware::Wrapped_Target(arg); 
+}
+
+static PyObject * unwrap_apply(PyObject *module, PyObject * const * args, size_t nargs, PyObject* kwnames) {
+
+    if (nargs == 0) {
+        PyErr_SetString(PyExc_TypeError, "unwrap_apply requires at least one argument");
+        return nullptr;
+    }
+
+    PyObject * wrapped = args[0];
+
+    if (!PyObject_TypeCheck(wrapped, &retracesoftware::Wrapped_Type)) {
+        PyErr_SetString(PyExc_TypeError, "first argment must be a wrapped object");
+        return nullptr;
+    }
+
+    PyObject * result = PyObject_Vectorcall(
+        retracesoftware::Wrapped_Target(wrapped),
+        args + 1,
+        (nargs - 1) | PY_VECTORCALL_ARGUMENTS_OFFSET,
+        kwnames);
+
+    return result;
+}
+
+static PyObject * yields_callable_instances(PyObject * module, PyObject * cls) {
+    if (!PyType_Check(cls)) {
+        PyErr_SetString(PyExc_TypeError, "yeilds_callable_instances takes a type");
+        return nullptr;
+    }
+
+    return PyBool_FromLong(reinterpret_cast<PyTypeObject*>(cls)->tp_call != nullptr);
+}
+
+static PyObject * yields_weakly_referenceable_instances(PyObject * module, PyObject * cls) {
+
+    if (!PyType_Check(cls)) {
+        PyErr_SetString(PyExc_TypeError, "yields_weakly_referenceable_instances takes a type");
+        return nullptr;
+    }
+
+    return PyBool_FromLong(reinterpret_cast<PyTypeObject*>(cls)->tp_weaklistoffset > 0);
+}
+
+static bool is_direct_subtype(PyTypeObject * sub, PyTypeObject * base) {
+    if (sub == base) return true;
+    else if (sub == nullptr) return false;
+    else return is_direct_subtype(sub->tp_base, base);
+}
+
+static PyObject * set_type(PyObject * module, PyObject * const * args, size_t nargs) {
+
+    if (nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "set_type requires two arguments");
+        return nullptr;
+    }
+    if (!PyType_Check(args[1])) {
+        PyErr_SetString(PyExc_TypeError, "second argument to set_type must be a type");
+        return nullptr;
+    }
+
+    PyTypeObject * target_type = reinterpret_cast<PyTypeObject *>(args[1]);
+    PyTypeObject * current_type = Py_TYPE(args[0]);
+
+    if (!is_direct_subtype(target_type, current_type)) {
+        PyErr_Format(PyExc_TypeError, "target type: %S, must be subtype of: %S", target_type, current_type);
+        return nullptr;
+    }
+
+    if (target_type->tp_itemsize != 0 || current_type->tp_itemsize != 0) {
+        PyErr_Format(PyExc_TypeError, "assigning types where itemsize != 0 is not supported");
+        return nullptr;
+    }
+
+    if (target_type->tp_basicsize != current_type->tp_basicsize) {
+        PyErr_Format(PyExc_TypeError, "target type: %S, differs in size of subtype of: %S", target_type, current_type);
+        return nullptr;
+    }
+
+    Py_DECREF(current_type);
+    Py_INCREF(target_type);
+
+    Py_SET_TYPE(args[0], target_type);
+
+    return Py_NewRef(args[0]);
+}
+
+static PyObject * is_extendable(PyObject * module, PyObject * obj) {
+    if (!PyType_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "is_extendable takes a type as a parameter");
+        return nullptr;
+    }
+
+    PyTypeObject * cls = reinterpret_cast<PyTypeObject *>(obj);
+    return PyBool_FromLong(PyType_HasFeature(cls, Py_TPFLAGS_BASETYPE));
+}
+
+static PyObject * create_wrapped(PyObject * module, PyObject * const * args, size_t nargs) {
+
+    if (nargs != 2) {
+        PyErr_SetString(PyExc_TypeError, "create_wrapped takes two parameters");
+        return nullptr;
+    }
+    if (!PyType_Check(args[0])) {
+        PyErr_Format(PyExc_TypeError, "first parameter of create_wrapped must be a type, but was passed: %S", args[0]);
+        return nullptr;
+    }
+
+    return retracesoftware::create_wrapped(reinterpret_cast<PyTypeObject *>(args[0]), args[1]);
+}
+
 static PyMethodDef module_methods[] = {
+    {"is_extendable", is_extendable, METH_O, "Is the supplied type is extendable"},
+    {"create_wrapped", (PyCFunction)create_wrapped, METH_FASTCALL, "TODO"},
+    {"set_type", (PyCFunction)set_type, METH_FASTCALL, "TODO"},
+    {"yields_callable_instances", (PyCFunction)yields_callable_instances, METH_O, "TODO"},
+    {"yields_weakly_referenceable_instances", (PyCFunction)yields_weakly_referenceable_instances, METH_O, "TODO"},
+    {"unwrap_apply", (PyCFunction)unwrap_apply, METH_FASTCALL | METH_KEYWORDS, "TODO"},
+    {"try_unwrap", try_unwrap, METH_O, "TODO"},
+    {"unwrap", unwrap, METH_O, "TODO"},
     {"hashseed", get_hashseed, METH_NOARGS, "Get PYTHONHASHSEED internals"},
     {"sigtrap", (PyCFunction)sigtrap, METH_O, "TODO"},
     {"stacktrace", (PyCFunction)stack_trace_impl, METH_NOARGS, "TODO"},
@@ -126,7 +257,7 @@ static PyMethodDef module_methods[] = {
     {"set_type_flags", (PyCFunction)set_type_flags, METH_VARARGS, "return type flags as an int"},
     {"noop", (PyCFunction)noop, METH_FASTCALL | METH_KEYWORDS, "TODO"},
     {"raise_exception", (PyCFunction)raise_exception, METH_FASTCALL, "TODO"},
-    {"set_type", (PyCFunction)set_type, METH_VARARGS | METH_KEYWORDS, "TODO"},
+    // {"set_type", (PyCFunction)set_type, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {NULL, NULL, 0, NULL}  // Sentinel
 };
 
@@ -207,6 +338,11 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
 
         &retracesoftware::FastSet_Type,
         &retracesoftware::InstanceCheck_Type,
+        &retracesoftware::Visitor_Type,
+        &retracesoftware::Wrapped_Type,
+        &retracesoftware::MethodDescriptorProxy_Type,
+        &retracesoftware::Reference_Type,
+        &retracesoftware::ThreadWatcher_Type,
         NULL
     };
 

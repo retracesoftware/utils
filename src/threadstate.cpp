@@ -644,7 +644,7 @@ namespace retracesoftware {
         }
     };
 
-    // static PyObject * avaliable_states(PyObject * state) {
+    // static PyObject * avaliable_states(PyqObject * state) {
     //     return reinterpret_cast<ThreadState *>(state)->avaliable_states;
     // }
 
