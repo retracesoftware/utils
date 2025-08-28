@@ -241,7 +241,40 @@ static PyObject * create_wrapped(PyObject * module, PyObject * const * args, siz
     return retracesoftware::create_wrapped(reinterpret_cast<PyTypeObject *>(args[0]), args[1]);
 }
 
+static PyObject * has_generic_new(PyObject * module, PyObject * obj) {
+    if (!PyType_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "has_generic_new takes a type as a parameter");
+        return nullptr;
+    }
+    PyTypeObject * cls = reinterpret_cast<PyTypeObject *>(obj);
+
+    return PyBool_FromLong(cls->tp_new == PyType_GenericNew);
+}
+
+static PyObject * has_generic_alloc(PyObject * module, PyObject * obj) {
+    if (!PyType_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "has_generic_alloc takes a type as a parameter");
+        return nullptr;
+    }
+    PyTypeObject * cls = reinterpret_cast<PyTypeObject *>(obj);
+
+    return PyBool_FromLong(cls->tp_alloc == PyType_GenericAlloc);
+}
+
+static PyObject * create_stub_object(PyObject * module, PyObject * obj) {
+    if (!PyType_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "create_stub_object takes a type as a parameter");
+        return nullptr;
+    }
+    PyTypeObject * cls = reinterpret_cast<PyTypeObject *>(obj);
+
+    return cls->tp_alloc(cls, 0);
+}
+
 static PyMethodDef module_methods[] = {
+    {"create_stub_object", create_stub_object, METH_O, "Creates a stub object given the type, but bypasses __new__ and __init__ initialization"},
+    {"has_generic_new", has_generic_new, METH_O, "Does the supplied type have a generic __new__ function?"},
+    {"has_generic_alloc", has_generic_alloc, METH_O, "Does the supplied type have a generic allocator"},
     {"is_extendable", is_extendable, METH_O, "Is the supplied type is extendable"},
     {"create_wrapped", (PyCFunction)create_wrapped, METH_FASTCALL, "TODO"},
     {"set_type", (PyCFunction)set_type, METH_FASTCALL, "TODO"},

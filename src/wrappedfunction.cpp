@@ -131,4 +131,90 @@ namespace retracesoftware {
         .tp_init = (initproc)WrappedFunction::init,
         // .tp_new = Wrapped_Type.tp_new,
     };
+
+    // struct Getter : public Wrapped {
+
+    // };
+
+    // struct ExtendedGetAttr : public WrappedFunction {
+
+    //     PyObject * get(PyObject * target, PyObject * name) {
+
+    //         PyObject * target_type = ...;
+
+    //         PyObject * args[] = {nullptr, ..., target_type, target, name};
+            
+    //         PyObject * result = handler_vectorcall(handler, args + 1, PyVectorcall_NARGS(3), nullptr);
+
+
+    //     }
+
+    //     static PyObject * py_vectorcall(ExtendedGetAttr * self, PyObject* const * args, size_t nargsf, PyObject* kwnames) {
+
+    //         if (kwnames) {
+    //             ...
+    //         }
+
+    //         size_t nargs = PyVectorcall_NARGS(nargsf);
+
+    //         if (nargs != 2) {
+    //             ...
+    //         }
+            
+    //         if (!PyUnicode_Check(args[1])) {
+
+    //         }
+    //         return self->get(args[0], args[1]);
+    //     }
+    // };
+
+    // struct Getter : public PyObject {
+
+    //     PyObject * target;
+    //     PyObject * descriptor;
+
+    //     static PyObject * py_vectorcall(Getter * self, PyObject* const * args, size_t nargsf, PyObject* kwnames) {
+            
+    //         Py_TYPE(descriptor)->tp_descr_get(descriptor, target, type)
+    //         self->target
+
+    //     }
+    // };
+
+    // struct Setter : public Wrapped {
+
+    // };
+
+    // struct Deleter : public Wrapped {
+
+    // };
+
+    // struct MemberDescriptor : public Wrapped {
+
+    //     PyObject * getter;
+    //     PyObject * setter;
+    //     PyObject * deleter;
+
+    //     static PyObject * tp_descr_get(MemberDescriptor *self, PyObject *obj, PyObject *type) {
+    //         // PyVectorcall_NARGS
+    //         size_t nargsf = 4 | PY_VECTORCALL_ARGUMENTS_OFFSET
+    //         PyObject * args[] = { nullptr, getter, self, obj, type };
+    //         return handler_vectorcall(handler, args + 1, nargsf, nullptr);
+    //     }
+
+    //     static int tp_descr_set(MemberDescriptor *self, PyObject *obj, PyObject *value) {
+    //         if (value) {
+    //             ...
+    //         } else {
+
+    //         }
+    //     }
+    // };
+
+    // struct ExtendedSetAttr : public WrappedFunction {
+
+    //     static PyObject * py_vectorcall(PyObject * self, PyObject* const * args, size_t nargsf, PyObject* kwnames) {
+
+    //     }
+    // }
 }
