@@ -17,13 +17,15 @@ py.extension_module(
    'src/instancecheck.cpp',
    'src/visitor.cpp',
    'src/wrapped.cpp',
-   'src/methoddescriptorproxy.cpp',
+   'src/wrappedfunction.cpp',
    'src/reference.cpp',
-   'src/threadwatcher.cpp'
+   'src/threadwatcher.cpp',
+   'src/proxy.cpp',
+   'src/idset.cpp'
    ],
   install: true,
 
   # If you want extra flags:
   # cpp_args: ['-O3', '-fvisibility=hidden'],
-  #include_directories: include_directories('.'),
+  include_directories: include_directories('common-headers/include'),
 )

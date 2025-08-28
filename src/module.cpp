@@ -129,7 +129,7 @@ static PyObject* unwrap(PyObject* self, PyObject* arg) {
         PyErr_Format(PyExc_TypeError, "Cannot unwrap: %S as it is not wrapped", arg);
         return nullptr;
     }
-    return retracesoftware::Wrapped_Target(arg); 
+    return Py_NewRef(retracesoftware::Wrapped_Target(arg)); 
 }
 
 static PyObject * unwrap_apply(PyObject *module, PyObject * const * args, size_t nargs, PyObject* kwnames) {
@@ -142,7 +142,7 @@ static PyObject * unwrap_apply(PyObject *module, PyObject * const * args, size_t
     PyObject * wrapped = args[0];
 
     if (!PyObject_TypeCheck(wrapped, &retracesoftware::Wrapped_Type)) {
-        PyErr_SetString(PyExc_TypeError, "first argment must be a wrapped object");
+        PyErr_Format(PyExc_TypeError, "first argment: %S must be of type: %S", args[0], &retracesoftware::Wrapped_Type);
         return nullptr;
     }
 
@@ -320,6 +320,8 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::Dispatch_Type,
         &retracesoftware::ThreadStateContext_Type,
         &retracesoftware::StableSetIterator_Type,
+        &retracesoftware::IdSetTest_Type,
+        &retracesoftware::IdSetLogical_Type,
         nullptr
     };
 
@@ -340,9 +342,11 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::InstanceCheck_Type,
         &retracesoftware::Visitor_Type,
         &retracesoftware::Wrapped_Type,
-        &retracesoftware::MethodDescriptorProxy_Type,
+        &retracesoftware::Proxy_Type,
+        &retracesoftware::WrappedFunction_Type,
         &retracesoftware::Reference_Type,
         &retracesoftware::ThreadWatcher_Type,
+        &retracesoftware::IdSet_Type,
         NULL
     };
 

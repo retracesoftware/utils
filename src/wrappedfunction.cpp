@@ -10,17 +10,17 @@
 
 namespace retracesoftware {
 
-    struct MethodDescriptorProxy : public Wrapped {
+    struct WrappedFunction : public Wrapped {
         PyObject * handler;
         vectorcallfunc handler_vectorcall;
         vectorcallfunc vectorcall;
 
-        static int traverse(MethodDescriptorProxy* self, visitproc visit, void* arg) {
+        static int traverse(WrappedFunction* self, visitproc visit, void* arg) {
             Py_VISIT(self->handler);
             return Wrapped_Type.tp_traverse(self, visit, arg);
         }
     
-        static int clear(MethodDescriptorProxy * self) {
+        static int clear(WrappedFunction * self) {
             Py_CLEAR(self->handler);
             return Wrapped_Type.tp_clear(self);
         }
@@ -55,10 +55,10 @@ namespace retracesoftware {
         }
 
         static PyObject * py_vectorcall(PyObject * self, PyObject* const * args, size_t nargsf, PyObject* kwnames) {
-            return reinterpret_cast<MethodDescriptorProxy *>(self)->call(args, nargsf, kwnames);
+            return reinterpret_cast<WrappedFunction *>(self)->call(args, nargsf, kwnames);
         }
 
-        static int init(MethodDescriptorProxy * self, PyObject * args, PyObject * kwargs) {
+        static int init(WrappedFunction * self, PyObject * args, PyObject * kwargs) {
             PyObject * handler;
             PyObject * target;
             static const char *kwlist[] = {"target", "handler", NULL};  // List of keyword
@@ -76,6 +76,10 @@ namespace retracesoftware {
 
         static PyObject* tp_descr_get(PyObject *self, PyObject *obj, PyObject *type) {
             return obj == NULL || obj == Py_None ? Py_NewRef(self) : PyMethod_New(self, obj);
+        }
+
+        static PyObject * repr(WrappedFunction *self) {
+            return PyUnicode_FromFormat("<wrapped_function %S>", self->target);
         }
     };
 
@@ -102,30 +106,29 @@ namespace retracesoftware {
     //     return Py_TYPE(self->target)->tp_getattro(self->target, name);
     // }    
 
-    PyTypeObject MethodDescriptorProxy_Type = {
+    PyTypeObject WrappedFunction_Type = {
         .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
         .tp_name = MODULE "wrapped_function",
-        .tp_basicsize = sizeof(MethodDescriptorProxy),
+        .tp_basicsize = sizeof(WrappedFunction),
         .tp_itemsize = 0,
         // .tp_dealloc = (destructor)MethodDescriptor_dealloc,
-        .tp_vectorcall_offset = OFFSET_OF_MEMBER(MethodDescriptorProxy, vectorcall),
-        // .tp_repr = (reprfunc)MethodDescriptor_repr,
+        .tp_vectorcall_offset = OFFSET_OF_MEMBER(WrappedFunction, vectorcall),
+        .tp_repr = (reprfunc)WrappedFunction::repr,
         .tp_call = PyVectorcall_Call,
-        // .tp_str = (reprfunc)MethodDescriptor_repr,
-
         // .tp_getattro = (binaryfunc)MethodDescriptor_getattro,
+        .tp_str = (reprfunc)WrappedFunction::repr,
 
         .tp_flags = Py_TPFLAGS_DEFAULT |
                     Py_TPFLAGS_HAVE_GC |
                     Py_TPFLAGS_HAVE_VECTORCALL |
                     Py_TPFLAGS_METHOD_DESCRIPTOR,
         .tp_doc = "TODO",
-        .tp_traverse = (traverseproc)MethodDescriptorProxy::traverse,
-        .tp_clear = (inquiry)MethodDescriptorProxy::clear,
+        .tp_traverse = (traverseproc)WrappedFunction::traverse,
+        .tp_clear = (inquiry)WrappedFunction::clear,
         // .tp_members = MethodDescriptor_members,
-        .tp_base = &Wrapped_Type,
-        .tp_descr_get = MethodDescriptorProxy::tp_descr_get,
-        .tp_init = (initproc)MethodDescriptorProxy::init,
+        .tp_base = &Proxy_Type,
+        .tp_descr_get = WrappedFunction::tp_descr_get,
+        .tp_init = (initproc)WrappedFunction::init,
         // .tp_new = Wrapped_Type.tp_new,
     };
 }

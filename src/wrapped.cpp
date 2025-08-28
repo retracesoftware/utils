@@ -25,7 +25,14 @@ namespace retracesoftware {
     }
 
     static PyObject* tp_getattro(PyObject * self, PyObject * name) {
-        return PyObject_GetAttr(Wrapped_Target(self), name);
+        PyObject * first_try = PyObject_GenericGetAttr(self, name);
+    
+        if (first_try) return first_try;
+    
+        PyErr_Clear();
+
+        return Py_TYPE(Wrapped_Target(self))->tp_getattro(Wrapped_Target(self), name);
+        // return PyObject_GetAttr(Wrapped_Target(self), name);
     }
 
     //     static PyObject * create(PyTypeObject *type, PyObject *args, PyObject *kwds) {

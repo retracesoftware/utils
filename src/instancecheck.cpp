@@ -109,7 +109,7 @@ namespace retracesoftware {
         static PyObject* add(InstanceCheck* self, PyObject* obj) {
 
             if (!PyObject_TypeCheck(obj, &PyType_Type)) {
-                PyErr_SetString(PyExc_TypeError, "Can only add types");
+                PyErr_Format(PyExc_TypeError, "Error in %S trying to add: %S, Can only add types", self, obj);
                 return nullptr;
             }
 
@@ -121,7 +121,7 @@ namespace retracesoftware {
         static PyObject* test(InstanceCheck* self, PyObject* obj) {
 
             if (!PyObject_TypeCheck(obj, &PyType_Type)) {
-                PyErr_SetString(PyExc_TypeError, "Can only add types");
+                PyErr_Format(PyExc_TypeError, "Error in %S trying to test: %S, Can only test types", self, obj);
                 return nullptr;
             }
             return Py_NewRef(self->contains(reinterpret_cast<PyTypeObject *>(Py_TYPE(obj))) ? obj : Py_None);

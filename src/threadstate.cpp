@@ -17,13 +17,14 @@ namespace retracesoftware {
     struct Dispatch : public PyVarObject {
         PyObject * state;
         vectorcallfunc vectorcall;
+        FastCall handlers[];
 
-        PyObject ** handlers() {
-            return (PyObject **)(this + 1);
-        }
+        // PyObject ** handlers() {
+        //     return (PyObject **)(this + 1);
+        // }
 
         PyObject * handler() {
-            return handlers()[ThreadState_GetIndex(state)];
+            return (handlers + ThreadState_GetIndex(state))->callable;
         }
 
         static int setattro(Dispatch *self, PyObject *name, PyObject * value) {
@@ -37,9 +38,10 @@ namespace retracesoftware {
         }
 
         static PyObject * call(Dispatch * self, PyObject** args, size_t nargsf, PyObject* kwnames) {
-            PyObject * handler = self->handler();
+        
+            FastCall * fc = self->handlers + ThreadState_GetIndex(self->state);
 
-            return handler ? PyObject_Vectorcall(handler, args, nargsf, kwnames) : Py_NewRef(Py_None);
+            return fc->callable ? fc->operator()(args, nargsf, kwnames) : Py_NewRef(Py_None);
         }
 
         static void dealloc(Dispatch *self) {
@@ -51,7 +53,7 @@ namespace retracesoftware {
         static int clear(Dispatch* self) {
             Py_CLEAR(self->state);
             for (int i = 0; i < self->ob_size; i++) {
-                Py_CLEAR(self->handlers()[i]);
+                Py_CLEAR(self->handlers[i].callable);
             }
             return 0;
         }
@@ -69,7 +71,7 @@ namespace retracesoftware {
             if (!parts) return nullptr;
 
             for (Py_ssize_t i = 0; i < n; i++) {
-                PyObject * repr = PyObject_Repr(self->handlers()[i]);
+                PyObject * repr = PyObject_Repr(self->handlers[i].callable);
 
                 PyObject * part = PyUnicode_FromFormat("%S = %S", PyTuple_GetItem(avaliable, i), repr);
 
@@ -97,7 +99,7 @@ namespace retracesoftware {
         static int traverse(Dispatch* self, visitproc visit, void* arg) {
             Py_VISIT(self->state);
             for (int i = 0; i < self->ob_size; i++) {
-                Py_VISIT(self->handlers()[i]);
+                Py_VISIT(self->handlers[i].callable);
             }
             return 0;
         }
@@ -113,7 +115,7 @@ namespace retracesoftware {
         .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
         .tp_name = MODULE "dispatch",
         .tp_basicsize = sizeof(Dispatch),
-        .tp_itemsize = sizeof(PyObject *),
+        .tp_itemsize = sizeof(FastCall),
         .tp_dealloc = (destructor)Dispatch::dealloc,
         .tp_vectorcall_offset = OFFSET_OF_MEMBER(Dispatch, vectorcall),
         .tp_repr = (reprfunc)Dispatch::repr,
@@ -565,8 +567,8 @@ namespace retracesoftware {
                 PyObject * key = PyTuple_GET_ITEM(self->avaliable_states, i);
 
                 if (PyDict_Contains(kwds, key)) {
-                    Py_DECREF(dispatch->handlers()[i]);
-                    dispatch->handlers()[i] = Py_NewRef(PyDict_GetItem(kwds, key));
+                    Py_DECREF(dispatch->handlers[i].callable);
+                    dispatch->handlers[i] = FastCall(Py_NewRef(PyDict_GetItem(kwds, key)));
                 }
             }
             Py_RETURN_NONE;
@@ -593,13 +595,13 @@ namespace retracesoftware {
                 PyObject * val = kwds ? PyDict_GetItem(kwds, key) : nullptr;
 
                 if (val) {
-                    dispatch->handlers()[i] = Py_XNewRef(val);
+                    dispatch->handlers[i] = FastCall(Py_XNewRef(val));
                 } else {
                     if (PyErr_Occurred()) {
                         Py_DECREF(dispatch);
                         return nullptr;
                     } else if (default_dispatch) {
-                        dispatch->handlers()[i] = Py_XNewRef(default_dispatch);
+                        dispatch->handlers[i] = FastCall(Py_XNewRef(default_dispatch));
                     } else {
                         PyErr_Format(PyExc_TypeError, "unhandled case: %S, an no default dispatch given", key);
                         return nullptr;

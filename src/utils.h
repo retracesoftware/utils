@@ -6,6 +6,8 @@
 #include <vector>
 #include <tuple>
 
+#include "fastcall.h"
+
 #define MODULE "retracesoftware_utils."
 
 #define OFFSET_OF_MEMBER(type, member) \
@@ -46,8 +48,12 @@ namespace retracesoftware {
     extern PyTypeObject InstanceCheck_Type;
     extern PyTypeObject Visitor_Type;
     extern PyTypeObject Wrapped_Type;
+    extern PyTypeObject Proxy_Type;
     extern PyTypeObject Reference_Type;
-    extern PyTypeObject MethodDescriptorProxy_Type;
+    extern PyTypeObject WrappedFunction_Type;
+    extern PyTypeObject IdSet_Type;
+    extern PyTypeObject IdSetTest_Type;
+    extern PyTypeObject IdSetLogical_Type;
 
     extern PyTypeObject ThreadWatcher_Type;
 
@@ -69,18 +75,18 @@ namespace retracesoftware {
     PyObject * create_wrapped(PyTypeObject * cls, PyObject * target);
     
     // PyObject * StableSet_GetItem(PyObject * set, int index);
-    static inline vectorcallfunc extract_vectorcall(PyObject *callable)
-    {
-        PyTypeObject *tp = Py_TYPE(callable);
-        if (!PyType_HasFeature(tp, Py_TPFLAGS_HAVE_VECTORCALL)) {
-            return PyObject_Vectorcall;
-        }
-        Py_ssize_t offset = tp->tp_vectorcall_offset;
+    // static inline vectorcallfunc extract_vectorcall(PyObject *callable)
+    // {
+    //     PyTypeObject *tp = Py_TYPE(callable);
+    //     if (!PyType_HasFeature(tp, Py_TPFLAGS_HAVE_VECTORCALL)) {
+    //         return PyObject_Vectorcall;
+    //     }
+    //     Py_ssize_t offset = tp->tp_vectorcall_offset;
 
-        vectorcallfunc ptr;
-        memcpy(&ptr, (char *) callable + offset, sizeof(ptr));
-        return ptr;
-    }
+    //     vectorcallfunc ptr;
+    //     memcpy(&ptr, (char *) callable + offset, sizeof(ptr));
+    //     return ptr;
+    // }
 
     struct Wrapped : public PyObject {
         PyObject * target;
