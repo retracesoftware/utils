@@ -30,7 +30,7 @@ namespace retracesoftware {
 
             PyObject ** mem = (PyObject **)alloca(sizeof(PyObject *) * (total_args + 1)) + 1;
 
-            mem[0] = this;
+            mem[0] = target;
             for (size_t i = 0; i < nargs; i++) {
                 mem[i + 1] = args[i];
             }
@@ -44,7 +44,7 @@ namespace retracesoftware {
             if (nargsf & PY_VECTORCALL_ARGUMENTS_OFFSET) {
 
                 PyObject * saved = args[-1];
-                ((PyObject **)args)[-1] = this;
+                ((PyObject **)args)[-1] = target;
 
                 PyObject * result = handler_vectorcall(handler, args - 1, PyVectorcall_NARGS(nargsf) + 1, kwnames);
                 ((PyObject **)args)[-1] = saved;

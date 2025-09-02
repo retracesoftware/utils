@@ -19,9 +19,10 @@ py.extension_module(
    'src/wrapped.cpp',
    'src/wrappedfunction.cpp',
    'src/reference.cpp',
-   'src/threadwatcher.cpp',
+   'src/threadawareproxy.cpp',
    'src/proxy.cpp',
-   'src/idset.cpp'
+   'src/idset.cpp',
+   'src/striptraceback.cpp'
    ],
   install: true,
 

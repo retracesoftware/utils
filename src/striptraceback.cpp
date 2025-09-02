@@ -73,22 +73,29 @@ namespace retracesoftware {
             self->vectorcall = (vectorcallfunc)call;
             return 0;
         }
+
+        static PyObject* tp_descr_get(PyObject *self, PyObject *obj, PyObject *type) {
+            return obj == NULL || obj == Py_None ? Py_NewRef(self) : PyMethod_New(self, obj);
+        }
     };
 
     PyTypeObject StripTraceback_Type = {
         .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
-        .tp_name = MODULE "strip_traceback",
+        .tp_name = MODULE "striptraceback",
         .tp_basicsize = sizeof(StripTraceback),
         .tp_dealloc = (destructor)StripTraceback::dealloc,
         .tp_vectorcall_offset = OFFSET_OF_MEMBER(StripTraceback, vectorcall),
         .tp_call = PyVectorcall_Call,
         .tp_flags = Py_TPFLAGS_DEFAULT | 
                     Py_TPFLAGS_HAVE_GC |
-                    Py_TPFLAGS_HAVE_VECTORCALL,
+                    Py_TPFLAGS_HAVE_VECTORCALL |
+                    Py_TPFLAGS_METHOD_DESCRIPTOR,
+
         .tp_traverse = (traverseproc)StripTraceback::traverse,
         .tp_clear = (inquiry)StripTraceback::clear,
         // .tp_methods = StubProxy_methods,
         // .tp_base = &Proxy_Type,
+        .tp_descr_get = StripTraceback::tp_descr_get,
         .tp_init = (initproc)StripTraceback::init,
         .tp_new = PyType_GenericNew,
     };

@@ -214,7 +214,7 @@ static PyObject * set_type(PyObject * module, PyObject * const * args, size_t na
 
     Py_SET_TYPE(args[0], target_type);
 
-    return Py_NewRef(args[0]);
+    Py_RETURN_NONE;
 }
 
 static PyObject * is_extendable(PyObject * module, PyObject * obj) {
@@ -271,7 +271,34 @@ static PyObject * create_stub_object(PyObject * module, PyObject * obj) {
     return cls->tp_alloc(cls, 0);
 }
 
+static PyObject * is_wrapped(PyObject * module, PyObject * obj) {
+    return PyBool_FromLong(PyObject_TypeCheck(obj, &retracesoftware::Wrapped_Type));
+}
+
+static PyObject * is_method_descriptor(PyObject * module, PyObject * obj) {
+    return PyBool_FromLong(PyType_HasFeature(Py_TYPE(obj), Py_TPFLAGS_METHOD_DESCRIPTOR));
+}
+
+static PyObject * thread_id(PyObject * module, PyObject * unised) {
+    PyObject * id = PyDict_GetItem(PyThreadState_GetDict(), module);
+
+    return Py_NewRef(id ? id : Py_None);
+}
+
+static PyObject * set_thread_id(PyObject * module, PyObject * id) {
+
+    if (PyDict_SetItem(PyThreadState_GetDict(), module, Py_NewRef(id)) == -1) {
+        Py_DECREF(id);        
+        return nullptr;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef module_methods[] = {
+    {"thread_id", (PyCFunction)thread_id, METH_NOARGS, "TODO"},
+    {"set_thread_id", (PyCFunction)set_thread_id, METH_O, "TODO"},
+    {"is_method_descriptor", is_method_descriptor, METH_O, "Returns if the object is a method descriptor"},
+    {"is_wrapped", is_wrapped, METH_O, "Returns if the object is wrapped"},
     {"create_stub_object", create_stub_object, METH_O, "Creates a stub object given the type, but bypasses __new__ and __init__ initialization"},
     {"has_generic_new", has_generic_new, METH_O, "Does the supplied type have a generic __new__ function?"},
     {"has_generic_alloc", has_generic_alloc, METH_O, "Does the supplied type have a generic allocator"},
@@ -378,8 +405,9 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::Proxy_Type,
         &retracesoftware::WrappedFunction_Type,
         &retracesoftware::Reference_Type,
-        &retracesoftware::ThreadWatcher_Type,
+        &retracesoftware::ThreadAwareProxy_Type,
         &retracesoftware::IdSet_Type,
+        &retracesoftware::StripTraceback_Type,
         NULL
     };
 

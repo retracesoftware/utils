@@ -2,7 +2,7 @@
 #include <structmember.h>
 
 namespace retracesoftware {
-    struct ThreadWatcher {
+    struct ThreadAwareProxy {
         PyObject_HEAD
         PyObject * on_thread_switch;
         PyThreadState * last_thread_state;
@@ -12,7 +12,7 @@ namespace retracesoftware {
         vectorcallfunc target_func;
     };
 
-    static bool before(ThreadWatcher * self) {
+    static bool before(ThreadAwareProxy * self) {
         // assert(PyCallable_Check(self->on_thread_switch));
 
         if (PyThreadState_Get() != self->last_thread_state) {
@@ -28,37 +28,37 @@ namespace retracesoftware {
         return true;
     }
 
-    static PyObject * vectorcall(ThreadWatcher * self, PyObject* const* args, size_t nargsf, PyObject* kwnames) {
+    static PyObject * vectorcall(ThreadAwareProxy * self, PyObject* const* args, size_t nargsf, PyObject* kwnames) {
         if (!before(self)) return nullptr;
 
         return self->target_func(self->target, args, nargsf, kwnames);
     }
 
-    static PyObject * getattro(ThreadWatcher *self, PyObject *name) {
+    static PyObject * getattro(ThreadAwareProxy *self, PyObject *name) {
         if (!before(self)) return nullptr;
 
         return PyObject_GetAttr(self->target, name);
     }
 
-    static int setattro(ThreadWatcher *self, PyObject * name, PyObject *value) {
+    static int setattro(ThreadAwareProxy *self, PyObject * name, PyObject *value) {
         if (!before(self)) return -1;
 
         return PyObject_SetAttr(self->target, name, value);
     }
 
-    static int traverse(ThreadWatcher* self, visitproc visit, void* arg) {
+    static int traverse(ThreadAwareProxy* self, visitproc visit, void* arg) {
         Py_VISIT(self->on_thread_switch);
         Py_VISIT(self->target);
         return 0;
     }
 
-    static int clear(ThreadWatcher* self) {
+    static int clear(ThreadAwareProxy* self) {
         Py_CLEAR(self->on_thread_switch);
         Py_CLEAR(self->target);
         return 0;
     }
 
-    static void dealloc(ThreadWatcher *self) {
+    static void dealloc(ThreadAwareProxy *self) {
         PyObject_GC_UnTrack(self);          // Untrack from the GC
         clear(self);
         Py_TYPE(self)->tp_free((PyObject *)self);  // Free the object
@@ -69,15 +69,15 @@ namespace retracesoftware {
         {NULL}  /* Sentinel */
     };
 
-    static PyObject * str(ThreadWatcher *self) {
+    static PyObject * str(ThreadAwareProxy *self) {
         return PyObject_Str(self->target);
     }
 
-    static PyObject * repr(ThreadWatcher *self) {
+    static PyObject * repr(ThreadAwareProxy *self) {
         return PyObject_Repr(self->target);
     }
 
-    static int init(ThreadWatcher *self, PyObject *args, PyObject *kwds) {
+    static int init(ThreadAwareProxy *self, PyObject *args, PyObject *kwds) {
 
         PyObject * function = NULL;
         PyObject * on_thread_switch = NULL;
@@ -103,19 +103,21 @@ namespace retracesoftware {
         return 0;
     }
 
-    PyTypeObject ThreadWatcher_Type = {
+    PyTypeObject ThreadAwareProxy_Type = {
         .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
-        .tp_name = MODULE "threadwatcher",
-        .tp_basicsize = sizeof(ThreadWatcher),
+        .tp_name = MODULE "threadawareproxy",
+        .tp_basicsize = sizeof(ThreadAwareProxy),
         .tp_itemsize = 0,
         .tp_dealloc = (destructor)dealloc,
-        .tp_vectorcall_offset = offsetof(ThreadWatcher, vectorcall),
+        .tp_vectorcall_offset = offsetof(ThreadAwareProxy, vectorcall),
         .tp_repr = (reprfunc)repr,
         .tp_call = PyVectorcall_Call,
         .tp_str = (reprfunc)str,
         .tp_getattro = (getattrofunc)getattro,
         .tp_setattro = (setattrofunc)setattro,
-        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_HAVE_VECTORCALL,
+        .tp_flags = Py_TPFLAGS_DEFAULT | 
+                    Py_TPFLAGS_HAVE_GC | 
+                    Py_TPFLAGS_HAVE_VECTORCALL,
         .tp_doc = "TODO",
         .tp_traverse = (traverseproc)traverse,
         .tp_clear = (inquiry)clear,
