@@ -9,6 +9,3 @@ requires-python = ">=3.11"
 [build-system]
 requires = ["meson-python>=0.15.0"]
 build-backend = "mesonpy"
-
-[tool.meson-python.sdist]
-include = ["common-headers/**", "src/**", "meson.build"]
