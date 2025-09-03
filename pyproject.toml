@@ -1,8 +1,14 @@
 [project]
 name = "retracesoftware_utils"
 version = "0.1.0"
+description = "Native utilities for retracesoftware"
+readme = "README.md"
 license = {text = "Apache-2.0"}
+requires-python = ">=3.11"
 
 [build-system]
 requires = ["meson-python>=0.15.0"]
 build-backend = "mesonpy"
+
+[tool.meson-python.sdist]
+include = ["common-headers/**", "src/**", "meson.build"]
