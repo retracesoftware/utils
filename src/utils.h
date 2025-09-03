@@ -53,11 +53,14 @@ namespace retracesoftware {
     extern PyTypeObject WrappedFunction_Type;
     extern PyTypeObject IdSet_Type;
     extern PyTypeObject IdSetTest_Type;
+    extern PyTypeObject IdDict_Type;
     extern PyTypeObject IdSetLogical_Type;
 
-    extern PyTypeObject ThreadAwareProxy_Type;
+    extern PyTypeObject ThreadSwitchMonitor_Type;
     extern PyTypeObject StripTraceback_Type;
-    
+    extern PyTypeObject Observer_Type;
+    extern PyTypeObject WeakRefCallback_Type;
+
     void force_full_gc(void);
 
     PyObject * Wrapped_Target(PyObject * proxy);

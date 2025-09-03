@@ -382,6 +382,7 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::StableSetIterator_Type,
         &retracesoftware::IdSetTest_Type,
         &retracesoftware::IdSetLogical_Type,
+        &retracesoftware::WeakRefCallback_Type,
         nullptr
     };
 
@@ -405,9 +406,11 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::Proxy_Type,
         &retracesoftware::WrappedFunction_Type,
         &retracesoftware::Reference_Type,
-        &retracesoftware::ThreadAwareProxy_Type,
+        &retracesoftware::ThreadSwitchMonitor_Type,
         &retracesoftware::IdSet_Type,
+        &retracesoftware::IdDict_Type,
         &retracesoftware::StripTraceback_Type,
+        &retracesoftware::Observer_Type,
         NULL
     };
 
