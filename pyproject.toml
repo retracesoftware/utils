@@ -1,6 +1,6 @@
 [project]
 name = "retracesoftware_utils"
-version = "0.1.0"
+version = "0.1.1"
 description = "Native utilities for retracesoftware"
 readme = "README.md"
 license = {text = "Apache-2.0"}
