@@ -16,22 +16,35 @@ namespace retracesoftware {
     };
 
     static inline bool call_void(vectorcallfunc vectorcall, PyObject * callable, PyObject* const * args, size_t nargsf, PyObject* kwnames) {
+        assert (!PyErr_Occurred());
+
         PyObject * result = vectorcall(callable, args, nargsf, kwnames);
-        Py_XDECREF(result);
-        return result ? true : false;
+        
+        if (result) {
+            Py_DECREF(result);
+            assert(!PyErr_Occurred());
+            return true;
+        } else {
+            assert(PyErr_Occurred());
+            return false;
+        }
     }
 
     static PyObject * call(Observer * self, PyObject* const * args, size_t nargsf, PyObject* kwnames) {
         
+        assert (!PyErr_Occurred());
+
         if (self->on_call) {
             if (!call_void(PyObject_Vectorcall, self->on_call, args, nargsf, kwnames)) {
                 return nullptr;
             }
+            assert (!PyErr_Occurred());
         }
 
         PyObject * result = self->func_vectorcall(self->func, args, nargsf, kwnames);
 
         if (result) {
+            assert (!PyErr_Occurred());
             if (self->on_result) {
                 if (!call_void(self->on_result_vectorcall, self->on_result, &result, 1, nullptr)) {
                     Py_DECREF(result);
@@ -39,6 +52,7 @@ namespace retracesoftware {
                 }
             }
         } else if (self->on_error) {
+            assert (PyErr_Occurred());
 
             PyObject * exc[] = {nullptr, nullptr, nullptr};
 

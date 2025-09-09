@@ -50,14 +50,17 @@ namespace retracesoftware {
     //     return (PyObject *)self;
     // }
 
-    static int init(Wrapped* self, PyObject *args, PyObject *kwds) {
+    static PyObject * create(PyTypeObject* cls, PyObject *args, PyObject *kwds) {
+
+        Wrapped * self = (Wrapped *)cls->tp_alloc(cls, 0);
+        if (!self) return nullptr;
 
         if (PyTuple_GET_SIZE(args) == 0) {
             PyErr_Format(PyExc_TypeError, "%S requires a positional argument to wrap", &Wrapped_Type);
-            return -1;
+            return nullptr;
         }
         self->target = Py_NewRef(PyTuple_GET_ITEM(args, 0));
-        return 0;
+        return self;
     }
 
     PyTypeObject Wrapped_Type = {
@@ -77,8 +80,9 @@ namespace retracesoftware {
         // .tp_members = Wrapped_members,
         // .tp_base = &Proxy_Type,
         // .tp_new = create,
-        .tp_init = (initproc)init,
-        .tp_new = PyType_GenericNew,
+        // .tp_init = (initproc)init,
+        // .tp_new = PyType_GenericNew,
+        .tp_new = (newfunc)create,
     };
 
     bool Wrapped_Check(PyObject * obj) {
@@ -96,12 +100,14 @@ namespace retracesoftware {
             PyErr_Format(PyExc_TypeError, "first parameter of create_wrapped: %S must be a subtype of %S", cls, &Wrapped_Type);
             return nullptr;
         }
-        if (cls->tp_new != Wrapped_Type.tp_new) {
-            PyErr_Format(PyExc_TypeError, "%S has different initializer to: %S", cls, &Wrapped_Type);
-        }
-        if (cls->tp_init != Wrapped_Type.tp_init) {
-            PyErr_Format(PyExc_TypeError, "%S has different initializer to: %S", cls, &Wrapped_Type);
-        }
+        // if (cls->tp_new != Wrapped_Type.tp_new) {
+        //     PyErr_Format(PyExc_TypeError, "%S has different initializer to: %S", cls, &Wrapped_Type);
+        //     return nullptr;
+        // }
+        // if (cls->tp_init != Wrapped_Type.tp_init) {
+        //     PyErr_Format(PyExc_TypeError, "%S has different initializer to: %S", cls, &Wrapped_Type);
+        //     return nullptr;
+        // }
         
         Wrapped * self = reinterpret_cast<Wrapped *>(cls->tp_alloc(cls, 0));
 

@@ -58,20 +58,26 @@ namespace retracesoftware {
             return reinterpret_cast<WrappedFunction *>(self)->call(args, nargsf, kwnames);
         }
 
-        static int init(WrappedFunction * self, PyObject * args, PyObject * kwargs) {
+        static PyObject * create(PyTypeObject * cls, PyObject * args, PyObject * kwargs) {
+
             PyObject * handler;
             PyObject * target;
             static const char *kwlist[] = {"target", "handler", NULL};  // List of keyword
 
             if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO", (char **)kwlist, &target, &handler)) {
-                return -1;
+                return nullptr;
             }
+
+            WrappedFunction * self = (WrappedFunction *)cls->tp_alloc(cls, 0);
+
+            if (!self) return nullptr;
+
             self->handler = Py_NewRef(handler);
             self->target = Py_NewRef(target);
             self->handler_vectorcall = extract_vectorcall(handler);
             self->vectorcall = py_vectorcall;
 
-            return 0;
+            return self;
         }
 
         static PyObject* tp_descr_get(PyObject *self, PyObject *obj, PyObject *type) {
@@ -128,8 +134,8 @@ namespace retracesoftware {
         // .tp_members = MethodDescriptor_members,
         .tp_base = &Proxy_Type,
         .tp_descr_get = WrappedFunction::tp_descr_get,
-        .tp_init = (initproc)WrappedFunction::init,
-        // .tp_new = Wrapped_Type.tp_new,
+        // .tp_init = (initproc)WrappedFunction::init,
+        .tp_new = (newfunc)WrappedFunction::create,
     };
 
     // struct Getter : public Wrapped {
