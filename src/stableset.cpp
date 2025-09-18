@@ -356,6 +356,70 @@ namespace retracesoftware {
             return (PyObject *)self;
         }
 
+        static PyObject * frozenset_create(PyTypeObject *type, PyObject *args, PyObject *kwds) {
+
+            PyObject *iterable = NULL;
+
+            if (!_PyArg_NoKeywords("frozenset", kwds))
+                return nullptr;
+
+            if (!PyArg_UnpackTuple(args, "frozenset", 0, 1, &iterable))
+                return nullptr;
+
+            PyTypeObject * cls = type;
+
+            while (cls->tp_new != frozenset_create) {
+                cls = cls->tp_base;
+            }
+            while (cls->tp_new == frozenset_create) {
+                cls = cls->tp_base;
+            }
+
+            PyObject * empty = PyTuple_New(0);
+
+            StableSet * self = (StableSet *)cls->tp_new(type, empty, nullptr);
+
+            Py_DECREF(empty);
+
+            if (iterable == NULL || !self) {
+                return (PyObject *)self;
+            }
+            
+            new (&self->order) std::vector<uintptr_t>();
+
+            if (!self->add_all(iterable)) {
+                Py_DECREF(self);
+                return nullptr;
+            }
+            return (PyObject *)self;
+        }
+
+        static int init(StableSet *self, PyObject *args, PyObject *kwds) {
+            
+            PyObject *iterable = NULL;
+
+            if (!_PyArg_NoKeywords("set", kwds))
+                return -1;
+
+            if (!PyArg_UnpackTuple(args, Py_TYPE(self)->tp_name, 0, 1, &iterable))
+                return -1;
+
+            if (iterable == NULL)
+                return 0;
+
+            // PyObject * it = PyObject_GetIter(iterable);
+
+            // if (it == NULL)
+            //     return -1;
+
+            return self->add_all(iterable);
+
+            // Py_DECREF(it);
+
+            // return added;
+        }
+
+
         PyObject * pop() {
             // is the last element added a 
             if (PySet_GET_SIZE(this) == 0) {
@@ -405,27 +469,6 @@ namespace retracesoftware {
             return true;
         }
 
-        static int init(StableSet *self, PyObject *args, PyObject *kwds) {
-            
-            PyObject *iterable = NULL;
-
-            if (!_PyArg_NoKeywords("set", kwds))
-                return -1;
-
-            if (!PyArg_UnpackTuple(args, Py_TYPE(self)->tp_name, 0, 1, &iterable))
-                return -1;
-
-            if (iterable == NULL)
-                return 0;
-
-            PyObject * it = PyObject_GetIter(iterable);
-
-            if (it == NULL)
-                return -1;
-
-            return self->add_all(it) ? 0 : -1;
-        }
-
         static PyTypeObject * base_type(PyObject * base);
 
         StableSet * copy() {
@@ -435,7 +478,7 @@ namespace retracesoftware {
             PyObject * args = PyTuple_New(0);
 
             StableSet * self = (StableSet *)cls->tp_new(cls, args, nullptr);
-            
+
             Py_DECREF(args);
 
             if (!self) return nullptr;
@@ -973,8 +1016,8 @@ namespace retracesoftware {
         .tp_iter = (getiterfunc)StableSet::iter,              /* tp_iter */
         .tp_methods = StableFrozenSet_methods,
         .tp_base = &PyFrozenSet_Type,
-        .tp_init = (initproc)StableSet::init,
-        .tp_new = (newfunc)StableSet::create,
+        // .tp_init = (initproc)StableSet::init,
+        .tp_new = (newfunc)StableSet::frozenset_create,
     };
 
     PyTypeObject * StableSet::base_type(PyObject * base) {
