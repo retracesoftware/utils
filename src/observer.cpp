@@ -19,7 +19,7 @@ namespace retracesoftware {
         assert (!PyErr_Occurred());
 
         PyObject * result = vectorcall(callable, args, nargsf, kwnames);
-        
+
         if (result) {
             Py_DECREF(result);
             assert(!PyErr_Occurred());
@@ -145,6 +145,10 @@ namespace retracesoftware {
         {NULL}  /* Sentinel */
     };
 
+    static PyObject* tp_descr_get(PyObject *self, PyObject *obj, PyObject *type) {
+        return obj == NULL || obj == Py_None ? Py_NewRef(self) : PyMethod_New(self, obj);
+    }
+
     PyTypeObject Observer_Type = {
         .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
         .tp_name = MODULE "observer",
@@ -153,12 +157,16 @@ namespace retracesoftware {
         .tp_dealloc = (destructor)dealloc,
         .tp_vectorcall_offset = OFFSET_OF_MEMBER(Observer, vectorcall),
         .tp_call = PyVectorcall_Call,
-        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC | Py_TPFLAGS_HAVE_VECTORCALL,
+        .tp_flags = Py_TPFLAGS_DEFAULT | 
+                    Py_TPFLAGS_HAVE_GC | 
+                    Py_TPFLAGS_HAVE_VECTORCALL | 
+                    Py_TPFLAGS_METHOD_DESCRIPTOR,
         .tp_doc = "TODO",
         .tp_traverse = (traverseproc)traverse,
         .tp_clear = (inquiry)clear,
         // .tp_methods = methods,
         .tp_members = members,
+        .tp_descr_get = tp_descr_get,
         .tp_init = (initproc)init,
         .tp_new = PyType_GenericNew,
     };

@@ -3,6 +3,10 @@
 
 namespace retracesoftware {
 
+    static PyObject* tp_descr_get(PyObject *self, PyObject *obj, PyObject *type) {
+        return obj == NULL || obj == Py_None ? Py_NewRef(self) : PyMethod_New(self, obj);
+    }
+
     static void ThreadState_SetIndex(PyObject * state, int index);
     static int ThreadState_GetIndex(PyObject * state);
     static PyObject * ThreadState_AvaliableStates(PyObject * state);
@@ -156,6 +160,20 @@ namespace retracesoftware {
             return result;
         }
 
+        static PyObject * repr(ThreadStateWrapped *self) {
+            return PyUnicode_FromFormat("<ThreadStateWrapped thread_state = %S desired_state = %S, function = %S>", 
+                self->thread_state, 
+                ThreadState_ValueForIndex(self->thread_state, self->desired_index),
+                self->function);
+        }
+
+        static PyObject * str(ThreadStateWrapped *self) {
+            return PyUnicode_FromFormat("<ThreadStateWrapped thread_state = %S desired_state = %S, function = %S>", 
+                self->thread_state, 
+                ThreadState_ValueForIndex(self->thread_state, self->desired_index),
+                self->function);
+        }
+
         PyObject * wrap_result(PyObject * result) {
             if (sticky && result && PyCallable_Check(result)) {
                 PyObject * wrapped = ThreadStateWrapped_New(thread_state, result, desired_index, sticky);
@@ -211,16 +229,20 @@ namespace retracesoftware {
         .tp_basicsize = sizeof(ThreadStateWrapped),
         .tp_dealloc = (destructor)ThreadStateWrapped::dealloc,
         .tp_vectorcall_offset = OFFSET_OF_MEMBER(ThreadStateWrapped, vectorcall),
+        .tp_repr = (reprfunc)ThreadStateWrapped::repr,
         .tp_call = PyVectorcall_Call,
+        .tp_str = (reprfunc)ThreadStateWrapped::repr,
         .tp_getattro = (getattrofunc)ThreadStateWrapped::getattro,
         .tp_setattro = (setattrofunc)ThreadStateWrapped::setattro,
         .tp_flags = Py_TPFLAGS_DEFAULT |
                     Py_TPFLAGS_HAVE_GC |
                     Py_TPFLAGS_HAVE_VECTORCALL |
+                    Py_TPFLAGS_METHOD_DESCRIPTOR |
                     Py_TPFLAGS_DISALLOW_INSTANTIATION,
         .tp_doc = "TODO",
         .tp_traverse = (traverseproc)ThreadStateWrapped::traverse,
         .tp_clear = (inquiry)ThreadStateWrapped::clear,
+        .tp_descr_get = tp_descr_get,
     };
 
     static PyObject * ThreadStateWrapped_New(

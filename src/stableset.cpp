@@ -124,30 +124,30 @@ namespace retracesoftware {
         );
     }
 
-    static bool is_delete(PyObject * obj) {
-        return (reinterpret_cast<uintptr_t>(obj) & 0x1) == 0x1;
+    static bool is_delete(uintptr_t obj) {
+        return (obj & 0x1) == 0x1;
     }
 
-    static PyObject * remove_delete_flag(PyObject * obj) {
-        return reinterpret_cast<PyObject *>(reinterpret_cast<uintptr_t *>(obj) - 1);
+    static uintptr_t remove_delete_flag(uintptr_t obj) {
+        return obj - 1;
     }
 
-    static PyObject * add_delete_flag(PyObject * obj) {
-        return reinterpret_cast<PyObject *>(reinterpret_cast<uintptr_t *>(obj) + 1);
+    static uintptr_t add_delete_flag(uintptr_t obj) {
+        return obj + 1;
     }
 
-    static void clean(std::vector<PyObject *> &order) {
-        set<PyObject *> deletes;
+    static void clean(std::vector<uintptr_t> &order) {
+        set<uintptr_t> deletes;
 
         for (auto &obj : reversed(order)) {
             assert(obj);
 
             if (is_delete(obj)) {
                 deletes.insert(remove_delete_flag(obj));
-                obj = nullptr;
+                obj = 0;
             } else if (deletes.contains(obj)) {
                 deletes.erase(obj);
-                obj = nullptr;
+                obj = 0;
             }
         }
     }
@@ -162,9 +162,9 @@ namespace retracesoftware {
         return false;  // Value not found
     }
 
-    static void remove_deletes(std::vector<PyObject *> &order) {
+    static void remove_deletes(std::vector<uintptr_t> &order) {
         clean(order);
-        remove_value(order, nullptr);
+        remove_value(order, 0);
     }
 
     static bool foreach(std::function<bool (PyObject *)> f, PyObject * coll) {
@@ -227,10 +227,10 @@ namespace retracesoftware {
     static bool StableSet_Check(PyObject * set);
 
     struct StableSet : public PySetObject {
-        std::vector<PyObject *> order;
+        std::vector<uintptr_t> order;
 
         static void dealloc(StableSet *self) {
-            self->order.~vector<PyObject *>();
+            self->order.~vector<uintptr_t>();
 
             PyTypeObject * cls = Py_TYPE(self);
 
@@ -273,7 +273,7 @@ namespace retracesoftware {
             switch (PySet_Add(reinterpret_cast<PyObject *>(this), key)) {
                 case 0:
                     if (size() != before) {
-                        order.push_back(key);
+                        order.push_back((uintptr_t)key);
                     }
                     return true;
                 default:
@@ -286,10 +286,12 @@ namespace retracesoftware {
             int status = PySet_Discard((PyObject *)this, key);
             if (status == 1) {
                 if (order.size() < 8 && order.size() == size() + 1) {
-                    remove_first(order, key);
+                    remove_first(order, (uintptr_t)key);
                     // just delete the element
                 } else {
-                    order.push_back(add_delete_flag(key));
+                    uintptr_t tombstone = add_delete_flag((uintptr_t)key);
+                    assert(is_delete(tombstone));
+                    order.push_back(tombstone);
                 }
             } else if (status < 0) {
                 assert (PyErr_Occurred());
@@ -350,7 +352,7 @@ namespace retracesoftware {
             //     return nullptr;
             // }
 
-            new (&self->order) std::vector<PyObject *>();
+            new (&self->order) std::vector<uintptr_t>();
             return (PyObject *)self;
         }
 
@@ -363,9 +365,9 @@ namespace retracesoftware {
 
             assert(!order.empty());
 
-            PyObject * last_added = order.back();
+            PyObject * last_added = (PyObject *)order.back();
                 
-            if (is_delete(last_added)) {
+            if (is_delete((uintptr_t)last_added)) {
                 remove_deletes();
                 return pop();
             } else {
@@ -390,10 +392,10 @@ namespace retracesoftware {
             retracesoftware::remove_deletes(order);
 
             for (auto &obj : order) {
-                switch (contains(obj)) {
+                switch (contains((PyObject *)obj)) {
                     case 0: break;
                     case 1: 
-                        obj = nullptr;
+                        obj = 0;
                         break;
                     default:
                         return false;
@@ -430,7 +432,11 @@ namespace retracesoftware {
 
             PyTypeObject * cls = base_type((PyObject *)this);
 
-            StableSet * self = (StableSet *)cls->tp_new(cls, nullptr, nullptr);
+            PyObject * args = PyTuple_New(0);
+
+            StableSet * self = (StableSet *)cls->tp_new(cls, args, nullptr);
+            
+            Py_DECREF(args);
 
             if (!self) return nullptr;
 
@@ -438,19 +444,19 @@ namespace retracesoftware {
 
             self->order.reserve(order.size());
 
-            for (PyObject * obj : order) {
-                Py_INCREF(obj);
+            for (uintptr_t obj : order) {
+                Py_INCREF((PyObject *)obj);
             }
             
-            for (PyObject * obj : order) {
-                if (!self->add(obj)) {
+            for (uintptr_t obj : order) {
+                if (!self->add((PyObject *)obj)) {
                     Py_DECREF(self);
                     self = nullptr;
                     break;
                 }
             }
-            for (PyObject * obj : order) {
-                Py_DECREF(obj);
+            for (uintptr_t obj : order) {
+                Py_DECREF((PyObject *)obj);
             }
             return self;
         }
@@ -500,11 +506,11 @@ namespace retracesoftware {
             remove_deletes();
 
             for (auto& obj : order) {
-                switch (PySet_Contains(other, obj)) {
+                switch (PySet_Contains(other, (PyObject *)obj)) {
                     case 0: 
-                        switch(PySet_Discard((PyObject *)this, obj)) {
+                        switch(PySet_Discard((PyObject *)this, (PyObject *)obj)) {
                             case 1:
-                                obj = nullptr;
+                                obj = 0;
                                 break;
                             case 0:
                                 PyErr_Format(PyExc_SystemError, "Out of sync");
@@ -521,7 +527,7 @@ namespace retracesoftware {
                 }
             }
             Py_DECREF(other);
-            retracesoftware::remove_value(order, nullptr);
+            retracesoftware::remove_value(order, 0);
             // retracesoftware::clean(order); 
 
             return true;
@@ -794,7 +800,7 @@ namespace retracesoftware {
     struct StableSetIterator : public PyObject {
         StableSet * stable_set; /* Set to NULL when iterator is exhausted */
         Py_ssize_t si_used;
-        std::vector<PyObject *>::const_iterator i;
+        std::vector<uintptr_t>::const_iterator i;
         
         StableSetIterator(StableSet * stable_set) :
             stable_set(stable_set), si_used(stable_set->used), i(stable_set->order.begin())
@@ -840,7 +846,8 @@ namespace retracesoftware {
                 return nullptr;
         
             } else {
-                return Py_NewRef(*self->i++);
+                uintptr_t next = *self->i++;
+                return Py_NewRef((PyObject *)next);
             }
         }
 
@@ -987,10 +994,10 @@ namespace retracesoftware {
     
         ss->remove_deletes();
 
-        if (index < 0 || index > ss->order.size()) {
+        if (index < 0 || index > (int)ss->order.size()) {
             PyErr_Format(PyExc_ValueError, "Passed index %s for stable set access bigger than size: %i", index, ss->order.size());
             return nullptr;
         }
-        return ss->order[index];
+        return (PyObject *)ss->order[index];
     }
 }

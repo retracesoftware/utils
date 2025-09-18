@@ -156,7 +156,12 @@ namespace retracesoftware {
             PyObject * cls = get_class(frame);
             
             if (cls && cls != Py_None) {
-                classname = PyUnicode_AsUTF8(PyObject_GetAttrString(cls, "__name__"));
+                PyObject * name = PyObject_GetAttrString(cls, "__name__");
+
+                if (!name) throw nullptr;
+
+                classname = PyUnicode_AsUTF8(name);
+                Py_DECREF(name);
             }
             Py_XDECREF(cls);
 
@@ -190,20 +195,25 @@ namespace retracesoftware {
 
     PyObject * stacktrace_as_pyobject(void) {
 
-        std::vector<Frame> st = stacktrace();
+        try {
+            std::vector<Frame> st = stacktrace();
 
-        PyObject * res = PyList_New(st.size());
+            PyObject * res = PyList_New(st.size());
 
-        if (!res) return nullptr;
+            if (!res) return nullptr;
 
-        for (std::size_t i = 0; i < st.size(); ++i) {
+            for (std::size_t i = 0; i < st.size(); ++i) {
 
-            PyList_SetItem(res, i, PyTuple_Pack(5, PyUnicode_InternFromString(std::get<0>(st[i]).c_str()),
-                            PyLong_FromLong(std::get<1>(st[i])), 
-                            PyUnicode_InternFromString(std::get<2>(st[i]).c_str()),
-                            PyUnicode_InternFromString(std::get<3>(st[i]).c_str()),
-                            PyUnicode_InternFromString(std::get<4>(st[i]).c_str())));
+                PyList_SetItem(res, i, PyTuple_Pack(5, PyUnicode_InternFromString(std::get<0>(st[i]).c_str()),
+                                PyLong_FromLong(std::get<1>(st[i])), 
+                                PyUnicode_InternFromString(std::get<2>(st[i]).c_str()),
+                                PyUnicode_InternFromString(std::get<3>(st[i]).c_str()),
+                                PyUnicode_InternFromString(std::get<4>(st[i]).c_str())));
+            }
+            return res;
         }
-        return res;
+        catch (...) {
+            return nullptr;
+        }
     }
 }
