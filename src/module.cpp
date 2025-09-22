@@ -227,6 +227,16 @@ static PyObject * is_extendable(PyObject * module, PyObject * obj) {
     return PyBool_FromLong(PyType_HasFeature(cls, Py_TPFLAGS_BASETYPE));
 }
 
+static PyObject * is_immutable(PyObject * module, PyObject * obj) {
+    if (!PyType_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "is_immutable takes a type as a parameter");
+        return nullptr;
+    }
+
+    PyTypeObject * cls = reinterpret_cast<PyTypeObject *>(obj);
+    return PyBool_FromLong(PyType_HasFeature(cls, Py_TPFLAGS_IMMUTABLETYPE));
+}
+
 static PyObject * create_wrapped(PyObject * module, PyObject * const * args, size_t nargs) {
 
     if (nargs != 2) {
@@ -303,6 +313,7 @@ static PyMethodDef module_methods[] = {
     {"has_generic_new", has_generic_new, METH_O, "Does the supplied type have a generic __new__ function?"},
     {"has_generic_alloc", has_generic_alloc, METH_O, "Does the supplied type have a generic allocator"},
     {"is_extendable", is_extendable, METH_O, "Is the supplied type is extendable"},
+    {"is_immutable", is_immutable, METH_O, "Is the supplied type is immutable"},
     {"create_wrapped", (PyCFunction)create_wrapped, METH_FASTCALL, "TODO"},
     {"set_type", (PyCFunction)set_type, METH_FASTCALL, "TODO"},
     {"yields_callable_instances", (PyCFunction)yields_callable_instances, METH_O, "TODO"},
