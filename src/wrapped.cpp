@@ -69,7 +69,7 @@ namespace retracesoftware {
         .tp_basicsize = sizeof(Wrapped),
         .tp_itemsize = 0,
         .tp_dealloc = (destructor)dealloc,
-        .tp_getattro = tp_getattro,
+        // .tp_getattro = tp_getattro,
         .tp_flags = Py_TPFLAGS_DEFAULT |
                     Py_TPFLAGS_HAVE_GC |
                     Py_TPFLAGS_BASETYPE,
