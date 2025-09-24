@@ -26,6 +26,74 @@
 
 using namespace ankerl::unordered_dense;
 
+#ifndef LINEAR_PROBES
+#define LINEAR_PROBES 9
+#endif
+
+/* This must be >= 1 */
+#define PERTURB_SHIFT 5
+
+// Cut and paste from setobject.c, v3.11
+static setentry *
+set_lookkey(PySetObject *so, PyObject *key, Py_hash_t hash)
+{
+    setentry *table;
+    setentry *entry;
+    size_t perturb = hash;
+    size_t mask = so->mask;
+    size_t i = (size_t)hash & mask; /* Unsigned for defined overflow behavior */
+    int probes;
+    int cmp;
+
+    while (1) {
+        entry = &so->table[i];
+        probes = (i + LINEAR_PROBES <= mask) ? LINEAR_PROBES: 0;
+        do {
+            if (entry->hash == 0 && entry->key == NULL)
+                return entry;
+            if (entry->hash == hash) {
+                PyObject *startkey = entry->key;
+                // assert(startkey != dummy);
+                if (startkey == key)
+                    return entry;
+                if (PyUnicode_CheckExact(startkey)
+                    && PyUnicode_CheckExact(key)
+                    && _PyUnicode_EQ(startkey, key))
+                    return entry;
+                table = so->table;
+                Py_INCREF(startkey);
+                cmp = PyObject_RichCompareBool(startkey, key, Py_EQ);
+                Py_DECREF(startkey);
+                if (cmp < 0)
+                    return NULL;
+                if (table != so->table || entry->key != startkey)
+                    return set_lookkey(so, key, hash);
+                if (cmp > 0)
+                    return entry;
+                mask = so->mask;
+            }
+            entry++;
+        } while (probes--);
+        perturb >>= PERTURB_SHIFT;
+        i = (i * 5 + 1 + perturb) & mask;
+    }
+}
+
+static PyObject * find(PySetObject *so, PyObject * key) {
+    Py_hash_t hash;
+
+    if (!PyUnicode_CheckExact(key) ||
+        (hash = _PyASCIIObject_CAST(key)->hash) == -1) {
+        hash = PyObject_Hash(key);
+        if (hash == -1)
+            return nullptr;
+    }
+
+    setentry * entry = set_lookkey(so, key, hash);
+
+    return entry ? entry->key : nullptr;
+}
+
 namespace retracesoftware {
 
     template <typename T>
@@ -283,13 +351,16 @@ namespace retracesoftware {
         }
         
         int discard(PyObject *key) {        
+            
+            PyObject * orig_key = find(this, key);
+
             int status = PySet_Discard((PyObject *)this, key);
             if (status == 1) {
                 if (order.size() < 8 && order.size() == size() + 1) {
-                    remove_first(order, (uintptr_t)key);
+                    remove_first(order, (uintptr_t)orig_key);
                     // just delete the element
                 } else {
-                    uintptr_t tombstone = add_delete_flag((uintptr_t)key);
+                    uintptr_t tombstone = add_delete_flag((uintptr_t)orig_key);
                     assert(is_delete(tombstone));
                     order.push_back(tombstone);
                 }
@@ -758,7 +829,7 @@ namespace retracesoftware {
         }
 
         static PyObject * frozenset_and(PyObject * so, PyObject * other) {
-            PyObject * set = set_sub(so, other);
+            PyObject * set = set_and(so, other);
 
             if (!set) return nullptr;
             PyObject * frozen = create_frozenset(set);
