@@ -471,26 +471,28 @@ namespace retracesoftware {
 
         static PyTypeObject * base_type(PyObject * base);
 
-        StableSet * copy_to_mutable() {
+        static PyObject * create_set(PyObject * iterable) {
+            return PyObject_CallOneArg((PyObject *)&StableSet_Type, iterable);
 
-            PyObject * args = PyTuple_Pack(1, this);
+            // PyObject * args = PyTuple_Pack(1, iterable);
 
-            StableSet * self = (StableSet *)StableSet_Type.tp_new(&StableSet_Type, args, nullptr);
+            // PyObject * self = StableSet_Type.tp_new(&StableSet_Type, args, nullptr);
 
-            Py_DECREF(args);
+            // Py_DECREF(args);
 
-            return self;
+            // return self;
         }
 
         static PyObject * create_frozenset(PyObject * iterable) {
+            return PyObject_CallOneArg((PyObject *)&StableFrozenSet_Type, iterable);
 
-            PyObject * args = PyTuple_Pack(1, iterable);
+            // PyObject * args = PyTuple_Pack(1, iterable);
 
-            PyObject * self = StableFrozenSet_Type.tp_new(&StableFrozenSet_Type, args, nullptr);
+            // PyObject * self = StableFrozenSet_Type.tp_new(&StableFrozenSet_Type, args, nullptr);
 
-            Py_DECREF(args);
+            // Py_DECREF(args);
 
-            return self;
+            // return self;
         }
 
 
@@ -726,23 +728,16 @@ namespace retracesoftware {
         }
 
         static PyObject * set_sub(PyObject * a, PyObject * b) {
-            if (!StableSet_Check(a)) {
-                Py_RETURN_NOTIMPLEMENTED;
-            }
-            
-            StableSet * copy = reinterpret_cast<StableSet *>(a)->copy_to_mutable();
+            PyObject * copy = create_set(a);
             if (!copy) return nullptr;
-            if (!copy->difference_update(b)) {
+            if (!reinterpret_cast<StableSet *>(copy)->difference_update(b)) {
                 Py_DECREF(copy);
                 return nullptr;
             }
-            return reinterpret_cast<PyObject *>(copy);
+            return copy;
         }
 
         static PyObject * frozenset_sub(PyObject * a, PyObject * b) {
-            if (!StableSet_Check(a)) {
-                Py_RETURN_NOTIMPLEMENTED;
-            }
             PyObject * set = set_sub(a, b);
 
             if (!set) return nullptr;
@@ -753,23 +748,16 @@ namespace retracesoftware {
 
         static PyObject * set_and(PyObject *so, PyObject *other)
         {
-            if (!StableSet_Check(so))
-                Py_RETURN_NOTIMPLEMENTED;
-
-            StableSet * copy = reinterpret_cast<StableSet *>(so)->copy_to_mutable();
+            PyObject * copy = create_set(so);
             if (!copy) return nullptr;
-            if (!copy->intersection_update(other)) {
+            if (!reinterpret_cast<StableSet *>(copy)->intersection_update(other)) {
                 Py_DECREF(copy);
                 return nullptr;
             }
-            return reinterpret_cast<PyObject *>(copy);
+            return copy;
         }
 
         static PyObject * frozenset_and(PyObject * so, PyObject * other) {
-            if (!StableSet_Check(so)) {
-                Py_RETURN_NOTIMPLEMENTED;
-            }
-
             PyObject * set = set_sub(so, other);
 
             if (!set) return nullptr;
@@ -780,24 +768,17 @@ namespace retracesoftware {
 
         static PyObject * set_xor(PyObject *so, PyObject *other)
         {
-            if (!StableSet_Check(so)) {
-                Py_RETURN_NOTIMPLEMENTED;
-            }
+            PyObject * copy = create_set(so);
 
-            StableSet * copy = reinterpret_cast<StableSet *>(so)->copy_to_mutable();
             if (!copy) return nullptr;
-            if (!copy->symmetric_difference_update(other)) {
+            if (!reinterpret_cast<StableSet *>(copy)->symmetric_difference_update(other)) {
                 Py_DECREF(copy);
                 return nullptr;
             }
-            return reinterpret_cast<PyObject *>(copy);
+            return copy;
         }
 
         static PyObject * frozenset_xor(PyObject * so, PyObject * other) {
-            if (!StableSet_Check(so)) {
-                Py_RETURN_NOTIMPLEMENTED;
-            }
-
             PyObject * set = set_xor(so, other);
 
             if (!set) return nullptr;
@@ -808,15 +789,11 @@ namespace retracesoftware {
         
         static PyObject * set_or(PyObject *so, PyObject *other)
         {
-            if (!StableSet_Check(so)) {
-                Py_RETURN_NOTIMPLEMENTED;
-            }
-
-            StableSet * copy = reinterpret_cast<StableSet *>(so)->copy_to_mutable();
+            PyObject * copy = create_set(so);
             
             if (!copy) return nullptr;
             else if ((PyObject *)so == other) return (PyObject *)copy;
-            else if (!copy->add_all(other)) {
+            else if (!reinterpret_cast<StableSet *>(copy)->add_all(other)) {
                 Py_DECREF(copy);
                 return nullptr;
             }
@@ -824,9 +801,7 @@ namespace retracesoftware {
         }
 
         static PyObject * frozenset_or(PyObject * so, PyObject * other) {
-            if (!StableSet_Check(so)) {
-                Py_RETURN_NOTIMPLEMENTED;
-            }
+
             PyObject * set = set_or(so, other);
 
             if (!set) return nullptr;
@@ -834,7 +809,6 @@ namespace retracesoftware {
             PyObject * frozen = create_frozenset(set);
 
             Py_DECREF(set);
-            assert(!PyErr_Occurred());
             return frozen;
         }
 
