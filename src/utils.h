@@ -62,7 +62,8 @@ namespace retracesoftware {
     extern PyTypeObject StripTraceback_Type;
     extern PyTypeObject Observer_Type;
     extern PyTypeObject WeakRefCallback_Type;
-
+    extern PyTypeObject PerThread_Type;
+    
     void force_full_gc(void);
 
     PyObject * Wrapped_Target(PyObject * proxy);
@@ -79,7 +80,9 @@ namespace retracesoftware {
     PyObject * stacktrace_as_pyobject(void);
 
     PyObject * create_wrapped(PyTypeObject * cls, PyObject * target);
-    
+
+    void patch_hash(PyTypeObject * cls, PyObject * hashfunc);
+
     // PyObject * StableSet_GetItem(PyObject * set, int index);
     // static inline vectorcallfunc extract_vectorcall(PyObject *callable)
     // {

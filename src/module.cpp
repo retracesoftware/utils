@@ -281,6 +281,34 @@ static PyObject * create_stub_object(PyObject * module, PyObject * obj) {
     return cls->tp_alloc(cls, 0);
 }
 
+static PyObject * is_identity_hash(PyObject * module, PyObject * obj) {
+    if (!PyType_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "is_identity_hash takes a type as a parameter");
+        return nullptr;
+    }
+    PyTypeObject * cls = reinterpret_cast<PyTypeObject *>(obj);
+
+    return PyBool_FromLong(cls->tp_hash == (hashfunc)_Py_HashPointer);
+}
+
+static PyObject * patch_hash(PyObject * module, PyObject * args, PyObject * kwargs) {
+
+    PyTypeObject * cls;
+    PyObject * func;
+    static const char *kwlist[] = {"cls", "hashfunc", NULL};  // List of keyword
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!O", (char **)kwlist, &PyType_Type, &cls, &func)) {
+        return nullptr;
+    }
+
+    if (cls->tp_hash != (hashfunc)_Py_HashPointer) {
+        PyErr_Format(PyExc_TypeError, "Not patching hash for class: %S as it does not have identity hash", cls);
+        return nullptr;
+    }
+    retracesoftware::patch_hash(cls, func);
+    Py_RETURN_NONE;
+}
+
 static PyObject * is_wrapped(PyObject * module, PyObject * obj) {
     return PyBool_FromLong(PyObject_TypeCheck(obj, &retracesoftware::Wrapped_Type));
 }
@@ -289,7 +317,7 @@ static PyObject * is_wrapped(PyObject * module, PyObject * obj) {
 //     return PyBool_FromLong(PyType_HasFeature(Py_TYPE(obj), Py_TPFLAGS_METHOD_DESCRIPTOR));
 // }
 
-static PyObject * thread_id(PyObject * module, PyObject * unised) {
+static PyObject * thread_id(PyObject * module, PyObject * unused) {
     PyObject * id = PyDict_GetItem(PyThreadState_GetDict(), module);
 
     return Py_NewRef(id ? id : Py_None);
@@ -305,6 +333,8 @@ static PyObject * set_thread_id(PyObject * module, PyObject * id) {
 }
 
 static PyMethodDef module_methods[] = {
+    {"patch_hash", (PyCFunction)patch_hash, METH_VARARGS | METH_KEYWORDS, "Tests if the given type has an identity hash"},
+    {"is_identity_hash", is_identity_hash, METH_O, "Tests if the given type has an identity hash"},
     {"thread_id", (PyCFunction)thread_id, METH_NOARGS, "TODO"},
     {"set_thread_id", (PyCFunction)set_thread_id, METH_O, "TODO"},
     // {"is_method_descriptor", is_method_descriptor, METH_O, "Returns if the object is a method descriptor"},
@@ -422,6 +452,7 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::IdDict_Type,
         &retracesoftware::StripTraceback_Type,
         &retracesoftware::Observer_Type,
+        &retracesoftware::PerThread_Type,
         NULL
     };
 

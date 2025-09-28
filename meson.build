@@ -28,7 +28,9 @@ py.extension_module(
    'src/idset.cpp',
    'src/iddict.cpp',
    'src/striptraceback.cpp',
-   'src/observer.cpp'
+   'src/observer.cpp',
+   'src/patchhash.cpp',
+   'src/perthread.cpp'
    ],
   install: true,
 

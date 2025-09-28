@@ -88,6 +88,7 @@ namespace retracesoftware {
         PyObject * pending_keys;
         map<PyObject *, PyThreadState *> pending;
         vectorcallfunc vectorcall;
+        PyObject * on_timeout;
         std::mutex mtx;
         std::condition_variable wakeup;
         
@@ -95,19 +96,22 @@ namespace retracesoftware {
 
             PyObject * source;
             PyObject * key_function;
+            PyObject * initial_key = nullptr;
+            PyObject * on_timeout = nullptr;
 
-            static const char* kwlist[] = {"source", "key_function", nullptr};  // Keywords allowed
+            static const char* kwlist[] = {"source", "key_function", "initial_key", "on_timeout", nullptr};  // Keywords allowed
 
-            if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO", (char **)kwlist, &source, &key_function)) {
+            if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO|OO", (char **)kwlist, &source, &key_function, &initial_key, &on_timeout)) {
                 return -1;  
                 // Return NULL to propagate the parsing error
             }
             
             self->source = Py_NewRef(source);
             self->key_function = Py_NewRef(key_function);
-            self->next = self->next_key = nullptr;
+            self->next = nullptr;
+            self->next_key = Py_XNewRef(initial_key);
             self->pending_keys = PySet_New(0);
-
+            self->on_timeout = Py_XNewRef(on_timeout);
             new (&self->pending) map<PyObject *, PyThreadState *>();
             self->vectorcall = (vectorcallfunc)call;
 
@@ -138,7 +142,7 @@ namespace retracesoftware {
 
             std::unique_lock<std::mutex> lock(mtx);
 
-            return wakeup.wait_for(lock, std::chrono::seconds(120), pred);
+            return wakeup.wait_for(lock, std::chrono::seconds(5), pred);
         }
 
         bool ensure_next() {
@@ -147,7 +151,8 @@ namespace retracesoftware {
                 next = PyObject_CallNoArgs(source);
                 if (!next) return false;
 
-                next_key = PyObject_CallOneArg(key_function, next);
+                if (!next_key)
+                    next_key = PyObject_CallOneArg(key_function, next);
 
                 if (!next_key) {
                     Py_DECREF(next);
@@ -193,6 +198,8 @@ namespace retracesoftware {
 
                 if (!wait(key)) {
                     raise(SIGTRAP);
+                    PyErr_Format(PyExc_RuntimeError, "Error in demux waiting for: %S", key);
+                    return nullptr;
                 }
                 PyObject * res = next;
                 next = nullptr;
@@ -210,6 +217,7 @@ namespace retracesoftware {
         }
 
         static int traverse(Demultiplexer * self, visitproc visit, void* arg) {
+            Py_VISIT(self->on_timeout);
             Py_VISIT(self->key_function);
             Py_VISIT(self->source);
             Py_VISIT(self->next);
@@ -224,6 +232,7 @@ namespace retracesoftware {
         }
 
         static int clear(Demultiplexer * self) {
+            Py_CLEAR(self->on_timeout);
             Py_CLEAR(self->key_function);
             Py_CLEAR(self->source);
             Py_CLEAR(self->next);

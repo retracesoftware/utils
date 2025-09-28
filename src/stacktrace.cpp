@@ -59,16 +59,14 @@ namespace retracesoftware {
         if (!locals) {
             return nullptr;
         }
-        assert(PyDict_Check(locals));
+        // assert(PyDict_Check(locals));
+        static PyObject * selfstr = nullptr;
+        if (!selfstr) selfstr = PyUnicode_InternFromString("self");
 
-        PyObject *self = PyDict_GetItemString(locals, "self");
+        PyObject *self = PyObject_GetItem(locals, selfstr);
         Py_DECREF(locals);
 
-        if (self) {
-            return Py_NewRef(self);
-        } else {
-            Py_RETURN_NONE;
-        }
+        return self;
     }
 
     static PyObject * get_class(PyFrameObject * frame) {
@@ -89,47 +87,6 @@ namespace retracesoftware {
             Py_RETURN_NONE;
         }
     }
-
-    // static PyObject * classname(PyFrameObject * frame) {
-
-    //     PyObject * cls = get_class(frame);
-    //     if (!cls || cls == Py_None) return cls;
-
-    //     PyObject *cls_name = PyObject_GetAttrString(cls, "__name__");  // New reference
-
-    //     Py_DECREF(cls);
-
-    //     if (cls_name) {
-    //         return cls_name;
-    //     } else {
-    //         Py_RETURN_NONE;
-    //     }
-
-    //     // PyObject * self = get_self(frame);
-    //     // if (!self) return nullptr;
-
-    //     // if (PyObject_HasAttrString(self, "__class__")) {
-    //     //     PyObject *cls = PyObject_GetAttrString(self, "__class__");  // New reference
-
-    //     //     Py_DECREF(self);
-
-    //     //     if (cls) {
-    //     //         PyObject *cls_name = PyObject_GetAttrString(cls, "__name__");  // New reference
-    //     //         Py_DECREF(cls);
-    //     //         if (cls_name) {
-    //     //             const char *cls_name_str = PyUnicode_AsUTF8(cls_name);
-    //     //             if (cls_name_str && !PyErr_Occurred()) {
-    //     //                     funcname = std::string(cls_name_str) + "." + funcname;
-    //     //                 }
-    //     //                 PyErr_Clear();
-    //     //                 Py_DECREF(cls_name);
-    //     //             }
-    //     //             Py_DECREF(cls);
-    //     //         }
-    //     //     }
-    //     //     Py_DECREF(locals);
-    //     // }
-    // }
 
     std::vector<Frame> stacktrace(void) {
         PyThreadState *tstate = PyThreadState_Get();
@@ -153,17 +110,24 @@ namespace retracesoftware {
 
             const char * classname = "";
 
-            PyObject * cls = get_class(frame);
+            // PyObject * cls = get_class(frame);
             
-            if (cls && cls != Py_None) {
-                PyObject * name = PyObject_GetAttrString(cls, "__name__");
+            // if (!cls) {
+            //     PyErr_Clear();
+            //     classname = "<unknown>";
+            // }
+            // else if (PyDict_Check(cls)) {
 
-                if (!name) throw nullptr;
+            // }
+            // else if (cls != Py_None) {
+            //     PyObject * name = PyDict_GetAttrString(cls, "__name__");
 
-                classname = PyUnicode_AsUTF8(name);
-                Py_DECREF(name);
-            }
-            Py_XDECREF(cls);
+            //     if (!name) throw nullptr;
+
+            //     classname = PyUnicode_AsUTF8(name);
+            //     Py_DECREF(name);
+            // }
+            // Py_XDECREF(cls);
 
             if (filename && funcname) {
                 frames.push_back(std::make_tuple(std::string(filename), lineno, 
