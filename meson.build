@@ -4,10 +4,6 @@ project('retracesoftware_utils', 'cpp', default_options: ['cpp_std=c++20'])
 # Bind to the interpreter Meson/meson-python wants us to use.
 py = import('python').find_installation()
 
-py.install_sources(
-  'src/utils.py',
-  subdir: 'retracesoftware')
-
 py.extension_module(
   'retracesoftware_utils',
   ['src/module.cpp',
@@ -24,13 +20,10 @@ py.extension_module(
    'src/wrappedfunction.cpp',
    'src/reference.cpp',
    'src/threadswitchmonitor.cpp',
-   'src/proxy.cpp',
+   'src/proxy.cpp', 
    'src/idset.cpp',
    'src/iddict.cpp',
-   'src/striptraceback.cpp',
-   'src/observer.cpp',
-   'src/patchhash.cpp',
-   'src/perthread.cpp'
+   'src/observer.cpp'
    ],
   install: true,
 
