@@ -71,14 +71,18 @@ jobs:
             python -m pip install meson meson-python ninja
           CIBW_TEST_COMMAND: |
             python - <<'PY'
-            import importlib, subprocess
-            m = importlib.import_module('retracesoftware_utils')
-            print('module:', m.__file__)
+            import importlib, subprocess, sys, traceback
             try:
-                subprocess.run(['ldd', m.__file__], check=False)
-            except FileNotFoundError:
-                pass
-            print('ok')
+                m = importlib.import_module('retracesoftware_utils')
+                print('module:', m.__file__)
+                if sys.platform == 'darwin':
+                    subprocess.run(['otool', '-L', m.__file__], check=False)
+                else:
+                    subprocess.run(['ldd', m.__file__], check=False)
+                print('ok')
+            except Exception:
+                traceback.print_exc()
+                sys.exit(1)
             PY
 
       - name: ccache stats (macOS)
@@ -158,14 +162,18 @@ jobs:
             python -m pip install meson meson-python ninja
           CIBW_TEST_COMMAND: |
             python - <<'PY'
-            import importlib, subprocess
-            m = importlib.import_module('retracesoftware_utils')
-            print('module:', m.__file__)
+            import importlib, subprocess, sys, traceback
             try:
-                subprocess.run(['ldd', m.__file__], check=False)
-            except FileNotFoundError:
-                pass
-            print('ok')
+                m = importlib.import_module('retracesoftware_utils')
+                print('module:', m.__file__)
+                if sys.platform == 'darwin':
+                    subprocess.run(['otool', '-L', m.__file__], check=False)
+                else:
+                    subprocess.run(['ldd', m.__file__], check=False)
+                print('ok')
+            except Exception:
+                traceback.print_exc()
+                sys.exit(1)
             PY
 
       - name: ccache stats (Linux host)
