@@ -313,9 +313,9 @@ static PyObject * is_wrapped(PyObject * module, PyObject * obj) {
     return PyBool_FromLong(PyObject_TypeCheck(obj, &retracesoftware::Wrapped_Type));
 }
 
-// static PyObject * is_method_descriptor(PyObject * module, PyObject * obj) {
-//     return PyBool_FromLong(PyType_HasFeature(Py_TYPE(obj), Py_TPFLAGS_METHOD_DESCRIPTOR));
-// }
+static PyObject * is_method_descriptor(PyObject * module, PyObject * obj) {
+    return PyBool_FromLong(PyType_HasFeature(Py_TYPE(obj), Py_TPFLAGS_METHOD_DESCRIPTOR));
+}
 
 static PyObject * thread_id(PyObject * module, PyObject * unused) {
     PyObject * id = PyDict_GetItem(PyThreadState_GetDict(), module);
@@ -337,7 +337,7 @@ static PyMethodDef module_methods[] = {
     {"is_identity_hash", is_identity_hash, METH_O, "Tests if the given type has an identity hash"},
     {"thread_id", (PyCFunction)thread_id, METH_NOARGS, "TODO"},
     {"set_thread_id", (PyCFunction)set_thread_id, METH_O, "TODO"},
-    // {"is_method_descriptor", is_method_descriptor, METH_O, "Returns if the object is a method descriptor"},
+    {"is_method_descriptor", is_method_descriptor, METH_O, "Returns if the object is a method descriptor"},
     {"is_wrapped", is_wrapped, METH_O, "Returns if the object is wrapped"},
     {"create_stub_object", create_stub_object, METH_O, "Creates a stub object given the type, but bypasses __new__ and __init__ initialization"},
     {"has_generic_new", has_generic_new, METH_O, "Does the supplied type have a generic __new__ function?"},
