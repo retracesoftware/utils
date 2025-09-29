@@ -24,6 +24,7 @@ py.extension_module(
    'src/idset.cpp',
    'src/iddict.cpp',
    'src/perthread.cpp',
+   'src/patchhash.cpp',
    'src/observer.cpp'
    ],
   install: true,
