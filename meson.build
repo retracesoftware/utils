@@ -20,9 +20,10 @@ py.extension_module(
    'src/wrappedfunction.cpp',
    'src/reference.cpp',
    'src/threadswitchmonitor.cpp',
-   'src/proxy.cpp', 
+   'src/proxy.cpp',
    'src/idset.cpp',
    'src/iddict.cpp',
+   'src/perthread.cpp',
    'src/observer.cpp'
    ],
   install: true,
