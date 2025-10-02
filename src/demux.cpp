@@ -84,24 +84,65 @@ namespace retracesoftware {
         PyObject * source;
         PyObject * key_function;
         PyObject * next;
-        PyObject * next_key;
+        // PyObject * next_key;
         PyObject * pending_keys;
         map<PyObject *, PyThreadState *> pending;
         vectorcallfunc vectorcall;
         PyObject * on_timeout;
+        int timeout_seconds;
         std::mutex mtx;
         std::condition_variable wakeup;
         
+        bool test_pending(PyObject * key) {
+            bool res = false;
+
+            if (next) {
+                PyGILGuard gil;
+
+                PyObject * next_key = PyObject_CallOneArg(key_function, next);
+                
+                if (!next_key) {
+                    throw std::exception();
+                } else {
+                    if (key == next_key) {
+                        res = true;
+                    } else {
+                        
+                        switch (PyObject_RichCompareBool(next_key, key, Py_EQ)) {
+                            case 0: 
+                                res = false;
+                                break;
+                            case 1: res = true;
+                                break;
+                            default:
+                                Py_DECREF(next_key);
+                                throw std::exception();
+                        }
+                    }
+                    Py_DECREF(next_key);
+                }
+            }
+            return res;
+        }
+
         static int init(Demultiplexer * self, PyObject* args, PyObject* kwds) {
 
             PyObject * source;
             PyObject * key_function;
-            PyObject * initial_key = nullptr;
+            // PyObject * initial_key = nullptr;
             PyObject * on_timeout = nullptr;
+            int timeout_seconds = 5;
 
-            static const char* kwlist[] = {"source", "key_function", "initial_key", "on_timeout", nullptr};  // Keywords allowed
+            static const char* kwlist[] = {
+                "source", 
+                "key_function", 
+                // "initial_key", 
+                "on_timeout", 
+                "timeout_seconds",
+                nullptr};  // Keywords allowed
 
-            if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO|OO", (char **)kwlist, &source, &key_function, &initial_key, &on_timeout)) {
+            if (!PyArg_ParseTupleAndKeywords(args, kwds, "OO|OI", (char **)kwlist, 
+                &source, &key_function, &on_timeout, &timeout_seconds)) {
                 return -1;  
                 // Return NULL to propagate the parsing error
             }
@@ -109,11 +150,12 @@ namespace retracesoftware {
             self->source = Py_NewRef(source);
             self->key_function = Py_NewRef(key_function);
             self->next = nullptr;
-            self->next_key = Py_XNewRef(initial_key);
+            // self->next_key = Py_XNewRef(initial_key);
             self->pending_keys = PySet_New(0);
             self->on_timeout = Py_XNewRef(on_timeout);
             new (&self->pending) map<PyObject *, PyThreadState *>();
             self->vectorcall = (vectorcallfunc)call;
+            self->timeout_seconds = timeout_seconds;
 
             new (&self->mtx) std::mutex();
             new (&self->wakeup) std::condition_variable();
@@ -124,25 +166,18 @@ namespace retracesoftware {
         bool wait(PyObject * key) {
 
             auto pred = [this, key]() {
-                if (next_key == key) {
-                    return true;
-                }
-
-                PyGILGuard gil;
-
-                switch (PyObject_RichCompareBool(next_key, key, Py_EQ)) {
-                    case 0: return false;
-                    case 1: return true;
-                    default:
-                        throw std::exception();
-                }
+                return test_pending(key);
             };
 
+            assert (PyGILState_Check());
+            
             WaitingContext context(pending_keys, pending, key);
+
+            assert(!PyGILState_Check());
 
             std::unique_lock<std::mutex> lock(mtx);
 
-            return wakeup.wait_for(lock, std::chrono::seconds(5), pred);
+            return wakeup.wait_for(lock, std::chrono::seconds(timeout_seconds), pred);
         }
 
         bool ensure_next() {
@@ -150,14 +185,6 @@ namespace retracesoftware {
             if (!next) {                
                 next = PyObject_CallNoArgs(source);
                 if (!next) return false;
-
-                if (!next_key)
-                    next_key = PyObject_CallOneArg(key_function, next);
-
-                if (!next_key) {
-                    Py_DECREF(next);
-                    return false;
-                }
             }
             return true;
         }
@@ -168,7 +195,7 @@ namespace retracesoftware {
             if (!ensure_next()) return nullptr;
 
             // fast path
-            if (key == next_key) {
+            if (test_pending(key)) {
                 assert(next);
 
                 PyObject * res = next;
@@ -179,13 +206,16 @@ namespace retracesoftware {
                     Py_DECREF(res);
                     return nullptr;
                 }
-
-                next_key = PyObject_CallOneArg(key_function, next);
-                Py_DECREF(key);
-
-                if (next_key != key && !pending.empty()) {
+                
+                if (test_pending(key)) {
                     wakeup.notify_all();
-                }
+                } 
+                // next_key = PyObject_CallOneArg(key_function, next);
+                // // Py_DECREF(key);
+
+                // if (next_key != key && !pending.empty()) {
+                //     wakeup.notify_all();
+                // }
                 return res;
 
             } else if (PySet_Contains(pending_keys, key)) {
@@ -197,9 +227,14 @@ namespace retracesoftware {
                 }
 
                 if (!wait(key)) {
+                    
+                    if (on_timeout) {
+                        return PyObject_CallFunctionObjArgs(on_timeout, this, key, nullptr);
+                    } else {
+                        PyErr_Format(PyExc_RuntimeError, "Error in demux waiting for: %S", key);
+                        return nullptr;
+                    }
                     raise(SIGTRAP);
-                    PyErr_Format(PyExc_RuntimeError, "Error in demux waiting for: %S", key);
-                    return nullptr;
                 }
                 PyObject * res = next;
                 next = nullptr;
@@ -221,7 +256,6 @@ namespace retracesoftware {
             Py_VISIT(self->key_function);
             Py_VISIT(self->source);
             Py_VISIT(self->next);
-            Py_VISIT(self->next_key);
             Py_VISIT(self->pending_keys);
 
             for (auto it = self->pending.begin(); it != self->pending.end(); it++) {
@@ -236,7 +270,6 @@ namespace retracesoftware {
             Py_CLEAR(self->key_function);
             Py_CLEAR(self->source);
             Py_CLEAR(self->next);
-            Py_CLEAR(self->next_key);
             Py_CLEAR(self->pending_keys);
 
             for (auto it = self->pending.begin(); it != self->pending.end(); it++) {
@@ -252,6 +285,18 @@ namespace retracesoftware {
             Py_TYPE(self)->tp_free(self);  // Free the object
         }
 
+        static PyObject * pending_getter(Demultiplexer *self, void *closure) {
+            PyObject * res = PyTuple_New(self->pending.size());
+    
+            int i = 0;
+
+            for (auto it = self->pending.begin(); it != self->pending.end(); it++) {
+                PyTuple_SetItem(res, i++, Py_NewRef(it->first));
+            }
+            return res;
+            // return Py_NewRef(self->per_thread_state());
+        }
+
         static PyObject * call(Demultiplexer * self, PyObject* const * args, size_t nargsf, PyObject* kwnames) {
             if (kwnames || PyVectorcall_NARGS(nargsf) != 1) {
                 PyErr_SetString(PyExc_TypeError, "demux take one positional argument, a predicate");
@@ -261,7 +306,19 @@ namespace retracesoftware {
         }
     };
 
+    static PyGetSetDef getset[] = {
+        {"pending_keys", (getter)Demultiplexer::pending_getter, nullptr, "TODO", NULL},
+        {NULL}  // Sentinel
+    };
+
+    static PyMemberDef members[] = {
+        {"pending", T_OBJECT, OFFSET_OF_MEMBER(Demultiplexer, next), READONLY, "TODO"},
+        // {"pending_key", T_OBJECT, OFFSET_OF_MEMBER(Demultiplexer, next_key), READONLY, "TODO"},
+        {NULL}  /* Sentinel */
+    };
+
     PyTypeObject Demultiplexer_Type = {
+
         .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
         .tp_name = MODULE "demux",
         .tp_basicsize = sizeof(Demultiplexer),
@@ -276,7 +333,9 @@ namespace retracesoftware {
         .tp_traverse = (traverseproc)Demultiplexer::traverse,
         .tp_clear = (inquiry)Demultiplexer::clear,
         // .tp_methods = methods,
-        // .tp_members = members,
+        .tp_members = members,
+        .tp_getset = getset,
+
         // .tp_dictoffset = OFFSET_OF_MEMBER(Gateway, dict),
         .tp_init = (initproc)Demultiplexer::init,
         .tp_new = PyType_GenericNew,

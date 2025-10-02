@@ -4,6 +4,10 @@ project('retracesoftware_utils', 'cpp', default_options: ['cpp_std=c++20'])
 # Bind to the interpreter Meson/meson-python wants us to use.
 py = import('python').find_installation()
 
+py.install_sources(
+  'src/utils.py',
+  subdir: 'retracesoftware')
+
 py.extension_module(
   'retracesoftware_utils',
   ['src/module.cpp',
