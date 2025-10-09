@@ -30,7 +30,8 @@ py.extension_module(
    'src/perthread.cpp',
    'src/patchhash.cpp',
    'src/observer.cpp',
-   'src/frameeval.cpp'
+   'src/frameeval.cpp',
+   'src/newwrapper.cpp'
    ],
   install: true,
 

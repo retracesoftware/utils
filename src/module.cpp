@@ -497,6 +497,7 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::WeakRefCallback_Type,
         &retracesoftware::FrameEval_Type,
         &retracesoftware::CurrentFrame_Type,
+        &retracesoftware::NewWrapper_Type,
         nullptr
     };
 
