@@ -89,10 +89,14 @@ void dump_stack_trace(PyThreadState *tstate) {
 
 static PyObject * sigtrap(PyObject * module, PyObject * obj) {
     PyObject *s = PyObject_Str(obj);
-    printf("%s\n", PyUnicode_AsUTF8(s));
-    Py_DECREF(s);
-
-    dump_stack_trace(PyThreadState_Get());
+    if (!s) {
+        PyErr_Print();
+        PyErr_Clear();
+    } else {
+        printf("%s\n", PyUnicode_AsUTF8(s));
+        Py_DECREF(s);
+    }
+    // dump_stack_trace(PyThreadState_Get());
     raise(SIGTRAP);
     Py_RETURN_NONE;
 }
@@ -332,7 +336,74 @@ static PyObject * set_thread_id(PyObject * module, PyObject * id) {
     Py_RETURN_NONE;
 }
 
+static PyObject * intercept_frame_eval(PyObject * module, PyObject * args, PyObject * kwargs) {
+    PyObject * on_call = nullptr;
+    PyObject * on_result = nullptr;
+    PyObject * on_error = nullptr;
+
+    static const char *kwlist[] = {"on_call", "on_result", "on_error", nullptr};  // List of keyword
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OOO", (char **)kwlist, &on_call, &on_result, &on_error)) {
+        return nullptr;
+    }
+
+    PyInterpreterState * is = PyInterpreterState_Get();
+
+    retracesoftware::FrameEval_Install(is, on_call, on_result, on_error);
+
+    Py_RETURN_NONE;
+}
+
+static PyObject * remove_frame_eval(PyObject * module, PyObject * unused) {
+    retracesoftware::FrameEval_Remove(PyInterpreterState_Get());
+    Py_RETURN_NONE;
+} 
+
+static PyObject * make_compatible_subtype(PyTypeObject * base) {
+
+    /* Build a type spec with no new fields/slots, but with base's alloc/free. */
+    PyType_Slot slots[] = {
+        /* Inherit most behavior; just wire alloc/free to match base. */
+        {Py_tp_alloc, (void *)base->tp_alloc},
+        {Py_tp_free,  (void *)base->tp_free},
+        /* Optionally, inherit tp_new explicitly (often unnecessary). */
+        {Py_tp_new,   (void *)(base->tp_new ? base->tp_new : PyType_GenericNew)},
+        {0, 0}
+    };
+
+    PyType_Spec spec = {
+        .name = base->tp_name,                           /* e.g. "m.CompatSub" if you want a qualname */
+        .basicsize = base->tp_basicsize,                 /* no extra fields */
+        .itemsize  = base->tp_itemsize,                  /* preserve var-sized layout if any */
+        .flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HEAPTYPE | Py_TPFLAGS_BASETYPE,
+                    //  (base->tp_flags & Py_TPFLAGS_HAVE_GC)  /* keep GC tracking consistent */
+        .slots = slots
+    };
+
+    PyObject *bases = PyTuple_Pack(1, (PyObject *)base);
+    if (!bases) return NULL;
+
+    PyObject *sub = PyType_FromSpecWithBases(&spec, bases);
+    Py_DECREF(bases);
+    return sub;   /* New ref or NULL on error */
+}
+
+static PyObject * extend_type(PyObject * module, PyObject * obj) {
+
+    if (!PyType_Check(obj)) {
+        PyErr_SetString(PyExc_TypeError, "patch_new takes a type as a parameter");
+        return nullptr;
+    }
+    PyTypeObject * cls = reinterpret_cast<PyTypeObject *>(obj);
+
+    return make_compatible_subtype(cls);
+}
+
 static PyMethodDef module_methods[] = {
+    {"intercept_frame_eval", (PyCFunction)intercept_frame_eval, METH_VARARGS | METH_KEYWORDS, "Tests if the given type has an identity hash"},
+    {"remove_frame_eval", (PyCFunction)remove_frame_eval, METH_NOARGS, "Tests if the given type has an identity hash"},
+
+    {"extend_type", extend_type, METH_O, "TODO"},
     {"patch_hash", (PyCFunction)patch_hash, METH_VARARGS | METH_KEYWORDS, "Tests if the given type has an identity hash"},
     {"is_identity_hash", is_identity_hash, METH_O, "Tests if the given type has an identity hash"},
     {"thread_id", (PyCFunction)thread_id, METH_NOARGS, "TODO"},
@@ -424,6 +495,8 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::IdSetTest_Type,
         &retracesoftware::IdSetLogical_Type,
         &retracesoftware::WeakRefCallback_Type,
+        &retracesoftware::FrameEval_Type,
+        &retracesoftware::CurrentFrame_Type,
         nullptr
     };
 

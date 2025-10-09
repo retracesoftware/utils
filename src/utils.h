@@ -63,6 +63,8 @@ namespace retracesoftware {
     extern PyTypeObject Observer_Type;
     extern PyTypeObject WeakRefCallback_Type;
     extern PyTypeObject PerThread_Type;
+    extern PyTypeObject FrameEval_Type;
+    extern PyTypeObject CurrentFrame_Type;
     
     void force_full_gc(void);
 
@@ -96,6 +98,9 @@ namespace retracesoftware {
     //     memcpy(&ptr, (char *) callable + offset, sizeof(ptr));
     //     return ptr;
     // }
+
+    void FrameEval_Remove(PyInterpreterState * is);
+    bool FrameEval_Install(PyInterpreterState * is, PyObject * on_call, PyObject * on_result, PyObject * on_error);
 
     struct Wrapped : public PyObject {
         PyObject * target;

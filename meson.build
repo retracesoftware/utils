@@ -29,7 +29,8 @@ py.extension_module(
    'src/iddict.cpp',
    'src/perthread.cpp',
    'src/patchhash.cpp',
-   'src/observer.cpp'
+   'src/observer.cpp',
+   'src/frameeval.cpp'
    ],
   install: true,
 
