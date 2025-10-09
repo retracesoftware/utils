@@ -373,8 +373,8 @@ static PyObject * make_compatible_subtype(PyTypeObject * base) {
 
     PyType_Spec spec = {
         .name = base->tp_name,                           /* e.g. "m.CompatSub" if you want a qualname */
-        .basicsize = base->tp_basicsize,                 /* no extra fields */
-        .itemsize  = base->tp_itemsize,                  /* preserve var-sized layout if any */
+        .basicsize = (int)base->tp_basicsize,                 /* no extra fields */
+        .itemsize  = (int)base->tp_itemsize,                  /* preserve var-sized layout if any */
         .flags     = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HEAPTYPE | Py_TPFLAGS_BASETYPE,
                     //  (base->tp_flags & Py_TPFLAGS_HAVE_GC)  /* keep GC tracking consistent */
         .slots = slots
