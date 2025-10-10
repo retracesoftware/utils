@@ -10,6 +10,13 @@
 
 namespace retracesoftware {
 
+    static PyObject * keys_as_tuple(PyObject * dict) {
+        PyObject *keys_list = PyDict_Keys(dict);
+        PyObject * keys = PySequence_Tuple(keys_list);
+        Py_DECREF(keys_list);
+        return keys;
+    }
+
     struct NewWrapper : public PyObject {
         newfunc target;
         PyObject * handler;
@@ -17,44 +24,32 @@ namespace retracesoftware {
 
         PyObject * call(PyTypeObject * cls, PyObject * args, PyObject * kwargs) {
 
-            size_t nargs = PyTuple_GET_SIZE(args);
-            size_t nargsf = (nargs + 1) | PY_VECTORCALL_ARGUMENTS_OFFSET;
+            size_t nargs = PyTuple_GET_SIZE(args) + 2;
 
-            if (kwargs && PyDict_Size(kwargs) > 0) {
-                PyObject *keys_list = PyDict_Keys(kwargs);
-                PyObject * keys = PySequence_Tuple(keys_list);
-                Py_DECREF(keys_list);
+            PyObject * keys = kwargs && PyDict_Size(kwargs) > 0 ? keys_as_tuple(kwargs) : nullptr;
 
-                size_t total_args = nargs + PyTuple_GET_SIZE(keys);
+            size_t total_args = nargs + (keys ? PyTuple_GET_SIZE(keys) : 0);
 
-                PyObject ** args = (PyObject **)alloca((total_args + 2) * sizeof(PyObject *)) + 1;
+            PyObject ** onstack = (PyObject **)alloca((total_args + 1) * sizeof(PyObject *)) + 1;
+            PyObject ** current = onstack;
+            
+            *current++ = this;
+            *current++ = (PyObject *)cls;
 
-                args[0] = this;
-                PyObject ** current = args + 1;
-
-                for (size_t i = 0; i < nargs; i++) {
-                    *current++ = PyTuple_GET_ITEM(args, i);
-                }
-                for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(keys); i++) {
-                    PyObject * key = PyTuple_GET_ITEM(keys, i);
-                    PyObject * value = PyDict_GetItem(kwargs, key);
-                    *current++ = value;
-                }
-
-                PyObject * result = PyObject_Vectorcall(handler, args, nargsf, keys);
-                Py_DECREF(keys);
-                return result;
-
-            } else {
-                PyObject ** args = (PyObject **)alloca((nargs + 2) * sizeof(PyObject *)) + 1;
-                
-                args[0] = this;
-
-                for (size_t i = 0; i < nargs; i++) {
-                    args[i + 1] = PyTuple_GET_ITEM(args, i);
-                }
-                return PyObject_Vectorcall(handler, args, nargsf, nullptr);
+            for (size_t i = 0; i < PyTuple_GET_SIZE(args); i++) {
+                *current++ = PyTuple_GET_ITEM(args, i);
             }
+        
+            for (Py_ssize_t i = 0; i < (keys ? PyTuple_GET_SIZE(keys) : 0); i++) {
+                PyObject * key = PyTuple_GET_ITEM(keys, i);
+                PyObject * value = PyDict_GetItem(kwargs, key);
+                *current++ = value;
+            }
+
+            size_t nargsf = nargs | PY_VECTORCALL_ARGUMENTS_OFFSET;
+            PyObject * result = PyObject_Vectorcall(handler, onstack, nargsf, keys);
+            Py_XDECREF(keys);
+            return result;
         }
 
         static PyObject * create_posargs(size_t n, PyObject* const * args) {
@@ -77,9 +72,19 @@ namespace retracesoftware {
         static PyObject * py_vectorcall(NewWrapper * self, PyObject* const * args, size_t nargsf, PyObject* kwnames) {
             size_t nargs = PyVectorcall_NARGS(nargsf);
 
-            PyObject * posargs = create_posargs(nargs, args);
+            if (nargs < 1) {
+                PyErr_Format(PyExc_TypeError, "__new__ takes at least one positional argument, the type");
+                raise(SIGTRAP);
+                return nullptr;
+            }
+
+            PyObject * posargs = create_posargs(nargs - 1, args + 1);
             PyObject * kwargs = kwnames ? create_kwargs(kwnames, args + nargs) : nullptr;
 
+            if (!PyType_Check(args[0])) {
+                PyErr_Format(PyExc_TypeError, "First parameter to __new__ must be a type, but got: %S", args[0]);
+                return nullptr;
+            }
             PyObject * result = self->target((PyTypeObject *)args[0], posargs, kwargs);
             Py_DECREF(posargs);
             Py_XDECREF(kwargs);
@@ -135,6 +140,17 @@ namespace retracesoftware {
         return true;
     }
 
+    static PyObject * __name__(PyObject *self, void *closure) {
+        static PyObject * name = nullptr;
+        if (!name) name = PyUnicode_InternFromString("__name__");
+        return Py_NewRef(name);
+    }
+
+    static PyGetSetDef getset[] = {
+        {"__name__", __name__, nullptr, "TODO", NULL},
+        {NULL}  // Sentinel
+    };
+
     PyTypeObject NewWrapper_Type = {
         .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
         .tp_name = MODULE "newwrapper",
@@ -149,6 +165,8 @@ namespace retracesoftware {
         .tp_clear = (inquiry)NewWrapper::clear,
         // .tp_methods = methods,
         // .tp_members = members,
+        .tp_getset = getset,
+
         // .tp_descr_get = tp_descr_get,
         // .tp_init = (initproc)init,
         // .tp_new = PyType_GenericNew,

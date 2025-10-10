@@ -399,10 +399,26 @@ static PyObject * extend_type(PyObject * module, PyObject * obj) {
     return make_compatible_subtype(cls);
 }
 
+static PyObject * intercept__new__(PyObject * module, PyObject * args, PyObject *kwargs) {
+
+    PyTypeObject * cls;
+    PyObject * handler;
+    static const char *kwlist[] = {"type", "handler", NULL};  // List of keyword
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!O", (char **)kwlist, &PyType_Type, &cls, &handler)) {
+        return nullptr;
+    }
+
+    if (!retracesoftware::install_new_wrapper(cls, handler)) {
+        return nullptr;
+    }
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef module_methods[] = {
     {"intercept_frame_eval", (PyCFunction)intercept_frame_eval, METH_VARARGS | METH_KEYWORDS, "Tests if the given type has an identity hash"},
     {"remove_frame_eval", (PyCFunction)remove_frame_eval, METH_NOARGS, "Tests if the given type has an identity hash"},
-
+    {"intercept__new__", (PyCFunction)intercept__new__, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"extend_type", extend_type, METH_O, "TODO"},
     {"patch_hash", (PyCFunction)patch_hash, METH_VARARGS | METH_KEYWORDS, "Tests if the given type has an identity hash"},
     {"is_identity_hash", is_identity_hash, METH_O, "Tests if the given type has an identity hash"},
