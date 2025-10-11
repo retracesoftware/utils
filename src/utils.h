@@ -101,10 +101,10 @@ namespace retracesoftware {
     // }
 
     void FrameEval_Remove(PyInterpreterState * is);
-    bool FrameEval_Install(PyInterpreterState * is, PyObject * on_call, PyObject * on_result, PyObject * on_error);
+    bool FrameEval_Install(PyInterpreterState * is, PyObject * handler);
 
     bool install_new_wrapper(PyTypeObject * cls, PyObject * handler);
-
+    
     struct Wrapped : public PyObject {
         PyObject * target;
         PyObject * weakreflist;

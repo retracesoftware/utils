@@ -336,21 +336,10 @@ static PyObject * set_thread_id(PyObject * module, PyObject * id) {
     Py_RETURN_NONE;
 }
 
-static PyObject * intercept_frame_eval(PyObject * module, PyObject * args, PyObject * kwargs) {
-    PyObject * on_call = nullptr;
-    PyObject * on_result = nullptr;
-    PyObject * on_error = nullptr;
-
-    static const char *kwlist[] = {"on_call", "on_result", "on_error", nullptr};  // List of keyword
-
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "|OOO", (char **)kwlist, &on_call, &on_result, &on_error)) {
+static PyObject * intercept_frame_eval(PyObject * module, PyObject * handler) {
+    if (!retracesoftware::FrameEval_Install(PyInterpreterState_Get(), handler)) {
         return nullptr;
     }
-
-    PyInterpreterState * is = PyInterpreterState_Get();
-
-    retracesoftware::FrameEval_Install(is, on_call, on_result, on_error);
-
     Py_RETURN_NONE;
 }
 
@@ -416,7 +405,7 @@ static PyObject * intercept__new__(PyObject * module, PyObject * args, PyObject 
 }
 
 static PyMethodDef module_methods[] = {
-    {"intercept_frame_eval", (PyCFunction)intercept_frame_eval, METH_VARARGS | METH_KEYWORDS, "Tests if the given type has an identity hash"},
+    {"intercept_frame_eval", (PyCFunction)intercept_frame_eval, METH_O, "TODO"},
     {"remove_frame_eval", (PyCFunction)remove_frame_eval, METH_NOARGS, "Tests if the given type has an identity hash"},
     {"intercept__new__", (PyCFunction)intercept__new__, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"extend_type", extend_type, METH_O, "TODO"},

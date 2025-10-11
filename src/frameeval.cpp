@@ -34,7 +34,7 @@ namespace retracesoftware {
     static thread_local PyInterpreterState * cached_state = nullptr;
     static thread_local FrameEval * cached_eval = nullptr;
 
-    static thread_local bool in_callback = false;
+    static thread_local PyObject * callback = nullptr;
     static PyObject * interpreter_key = nullptr;
     static PyObject * kwnames = nullptr;
 
@@ -79,7 +79,7 @@ namespace retracesoftware {
 
             PyObject * names = self->frame->f_code->co_localsplusnames;
 
-            for (size_t i = 0; i < PyTuple_Size(names); i++) {
+            for (Py_ssize_t i = 0; i < PyTuple_Size(names); i++) {
                 PyObject * local = self->frame->localsplus[i];
                 PyDict_SetItem(locals, PyTuple_GetItem(names, i), local ? local : Py_None);
             }
@@ -116,21 +116,15 @@ namespace retracesoftware {
 
     struct FrameEval : public PyObject {
         _PyFrameEvalFunction frame_eval = nullptr;
-        FastCall on_call;
-        FastCall on_result;
-        FastCall on_error;
+        PyObject * handler;
         
         static int traverse(FrameEval* self, visitproc visit, void* arg) {
-            Py_VISIT(self->on_call.callable);
-            Py_VISIT(self->on_result.callable);
-            Py_VISIT(self->on_error.callable);
+            Py_VISIT(self->handler);
             return 0;
         }
 
         static int clear(FrameEval* self) {
-            Py_CLEAR(self->on_call.callable);
-            Py_CLEAR(self->on_result.callable);
-            Py_CLEAR(self->on_error.callable);
+            Py_CLEAR(self->handler);
             return 0;
         }
 
@@ -145,77 +139,90 @@ namespace retracesoftware {
 
         FrameEval * eval = find_frame_eval(PyThreadState_GetInterpreter(tstate));
 
-        if (in_callback || throw_flag) {
-            return eval->frame_eval(tstate, frame, throw_flag);
-        } else {
-            PyObject * context;
-
-            in_callback = true;
-
-            if (eval->on_call.callable) {
-
-                CurrentFrame * current = find_current_frame();
-
-                current->frame = frame;
-
-                context = eval->on_call(current);
-
-                if (!context) {
-                    PyErr_Clear();
-                    PyObject * result = eval->frame_eval(tstate, frame, throw_flag);
-                    in_callback = false;
-                    return result;
-                }
-
-            } else {
-                context = Py_NewRef(Py_None);
-            }
-
-            in_callback = false;
-
-            PyObject * result = eval->frame_eval(tstate, frame, throw_flag);
-
-            in_callback = true;
-
-            if (result) {
-                if (eval->on_result.callable) {
-                    PyObject * r = eval->on_result(context, result);
-
-                    if (!r) {
-                        Py_DECREF(result);
-                        Py_DECREF(context);
-                        return nullptr;
-                    }
-                    Py_DECREF(r);
-                }
-            } else {
-                if (eval->on_error.callable) {
-                    assert (PyErr_Occurred());
-
-                    PyObject * exc[] = {context, nullptr, nullptr, nullptr};
-
-                    // Fetch the current exception
-                    PyErr_Fetch(exc + 1, exc + 2, exc + 3);
-
-                    for (int i = 1; i < 4; i++) if (!exc[i]) exc[i] = Py_None;
-
-                    PyObject * r = eval->on_error(exc, 4, nullptr);
-
-                    if (!r) {
-                        for (int i = 1; i < 4; i++) if (exc[i] != Py_None) Py_DECREF(exc[i]);
-                    } else {
-                        Py_DECREF(r);
-                        PyErr_Restore(
-                            exc[1] == Py_None ? nullptr : exc[1], 
-                            exc[2] == Py_None ? nullptr : exc[2],
-                            exc[3] == Py_None ? nullptr : exc[3]);
-                    }
-                }
-            }
-            in_callback = false;
-            Py_DECREF(context);
+        if (!callback) {
+            callback = Py_NewRef(eval->handler);
+            PyObject * result = wrapper(tstate, frame, throw_flag);
+            Py_DECREF(callback);
             return result;
         }
+
+        if (!PyCallable_Check(callback) || throw_flag) {
+            return eval->frame_eval(tstate, frame, throw_flag);
+        }
+
+        PyObject * saved_callback = callback;
+        CurrentFrame * current = find_current_frame();
+        current->frame = frame;
+
+        callback = Py_None;
+        callback = PyObject_CallOneArg(saved_callback, current);
+
+        PyObject * result = nullptr;
+
+        if (callback) {
+            result = eval->frame_eval(tstate, frame, throw_flag);
+
+            PyObject * handle_res = callback;
+            callback = Py_None;
+
+            if (result) {
+                static PyObject * name = nullptr;
+                if (!name) name = PyUnicode_InternFromString("on_result");
+
+                PyObject * res = PyObject_CallMethodOneArg(handle_res, name, result);
+                if (!res) {
+                    if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
+                        PyErr_Clear();
+                    } else {
+                        Py_DECREF(result);
+                        result = nullptr;
+                    }
+                } else {
+                    Py_DECREF(res);
+                }
+
+            } else {
+
+                assert (PyErr_Occurred());
+
+                PyObject * exc[] = {nullptr, nullptr, nullptr};
+
+                // Fetch the current exception
+                PyErr_Fetch(exc + 0, exc + 1, exc + 2);
+
+                for (int i = 0; i < 3; i++) if (!exc[i]) exc[i] = Py_None;
+
+                static PyObject * name = nullptr;
+                if (!name) name = PyUnicode_InternFromString("on_error");
+                
+                PyObject * res = PyObject_CallMethodObjArgs(handle_res, name, exc[0], exc[1], exc[2], nullptr);
+
+                if (!res) {
+                    if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
+                        PyErr_Clear();
+                        PyErr_Restore(
+                            exc[0] == Py_None ? nullptr : exc[0], 
+                            exc[1] == Py_None ? nullptr : exc[1],
+                            exc[2] == Py_None ? nullptr : exc[2]);
+
+                    } else {
+                        for (int i = 0; i < 3; i++) if (exc[i] != Py_None) Py_DECREF(exc[i]);
+
+                        Py_DECREF(result);
+                        result = nullptr;
+                    }
+                } else {
+                    Py_DECREF(res);
+                    PyErr_Restore(
+                        exc[0] == Py_None ? nullptr : exc[0], 
+                        exc[1] == Py_None ? nullptr : exc[1],
+                        exc[2] == Py_None ? nullptr : exc[2]);
+                }
+            }
+            Py_DECREF(handle_res);
+        }    
+        callback = saved_callback;
+        return result;
     }
 
     PyTypeObject CurrentFrame_Type = {
@@ -258,11 +265,7 @@ namespace retracesoftware {
         }
     }
 
-    bool FrameEval_Install(
-        PyInterpreterState * is, 
-        PyObject * on_call,
-        PyObject * on_result,
-        PyObject * on_error) {
+    bool FrameEval_Install(PyInterpreterState * is, PyObject * handler) {
 
         FrameEval_Remove(is);
 
@@ -272,9 +275,7 @@ namespace retracesoftware {
             return false;
         }
 
-        eval->on_call = on_call ? FastCall(Py_NewRef(on_call)) : FastCall();
-        eval->on_result = on_result ? FastCall(Py_NewRef(on_result)) : FastCall();
-        eval->on_error = on_error ? FastCall(Py_NewRef(on_error)) : FastCall();
+        eval->handler = Py_NewRef(handler);
         eval->frame_eval = _PyInterpreterState_GetEvalFrameFunc(is);
 
         PyObject * dict = PyInterpreterState_GetDict(is);
