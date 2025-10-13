@@ -343,11 +343,6 @@ static PyObject * intercept_frame_eval(PyObject * module, PyObject * handler) {
     Py_RETURN_NONE;
 }
 
-static PyObject * remove_frame_eval(PyObject * module, PyObject * unused) {
-    retracesoftware::FrameEval_Remove(PyInterpreterState_Get());
-    Py_RETURN_NONE;
-} 
-
 static PyObject * make_compatible_subtype(PyTypeObject * base) {
 
     /* Build a type spec with no new fields/slots, but with base's alloc/free. */
@@ -406,7 +401,6 @@ static PyObject * intercept__new__(PyObject * module, PyObject * args, PyObject 
 
 static PyMethodDef module_methods[] = {
     {"intercept_frame_eval", (PyCFunction)intercept_frame_eval, METH_O, "TODO"},
-    {"remove_frame_eval", (PyCFunction)remove_frame_eval, METH_NOARGS, "Tests if the given type has an identity hash"},
     {"intercept__new__", (PyCFunction)intercept__new__, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"extend_type", extend_type, METH_O, "TODO"},
     {"patch_hash", (PyCFunction)patch_hash, METH_VARARGS | METH_KEYWORDS, "Tests if the given type has an identity hash"},
@@ -500,7 +494,6 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::IdSetTest_Type,
         &retracesoftware::IdSetLogical_Type,
         &retracesoftware::WeakRefCallback_Type,
-        &retracesoftware::FrameEval_Type,
         &retracesoftware::CurrentFrame_Type,
         &retracesoftware::NewWrapper_Type,
         nullptr

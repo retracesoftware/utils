@@ -63,7 +63,6 @@ namespace retracesoftware {
     extern PyTypeObject Observer_Type;
     extern PyTypeObject WeakRefCallback_Type;
     extern PyTypeObject PerThread_Type;
-    extern PyTypeObject FrameEval_Type;
     extern PyTypeObject CurrentFrame_Type;
     extern PyTypeObject NewWrapper_Type;
 
@@ -100,7 +99,6 @@ namespace retracesoftware {
     //     return ptr;
     // }
 
-    void FrameEval_Remove(PyInterpreterState * is);
     bool FrameEval_Install(PyInterpreterState * is, PyObject * handler);
 
     bool install_new_wrapper(PyTypeObject * cls, PyObject * handler);

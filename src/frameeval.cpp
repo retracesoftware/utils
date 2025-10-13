@@ -1,5 +1,6 @@
 #include "utils.h"
 #include <structmember.h>
+#include <thread>
 
 typedef struct _PyInterpreterFrame {
     /* "Specials" section */
@@ -25,47 +26,226 @@ typedef struct _PyInterpreterFrame {
 
 namespace retracesoftware {
 
-    struct FrameEval;
     struct CurrentFrame;
 
-    static thread_local PyThreadState * cached_thread = nullptr;
-    static thread_local CurrentFrame * cached_current = nullptr;
+    static PyObject* wrapper(PyThreadState *tstate, struct _PyInterpreterFrame * frame, int throw_flag);
 
-    static thread_local PyInterpreterState * cached_state = nullptr;
-    static thread_local FrameEval * cached_eval = nullptr;
-
-    static thread_local PyObject * callback = nullptr;
-    static PyObject * interpreter_key = nullptr;
-    static PyObject * kwnames = nullptr;
-
-    static FrameEval * find_frame_eval(PyInterpreterState * is) {
-        if (is != cached_state) {
-            PyObject * dict = PyInterpreterState_GetDict(is);
-            
-            cached_eval = (FrameEval *)PyDict_GetItem(dict, interpreter_key);
+    static PyObject * key() {
+            static PyObject * name = nullptr;
+            if (!name) name = PyUnicode_InternFromString("__retrace_utils_eval_wrapper__");
+            return name;
         }
-        return cached_eval;
-    }
 
-    static CurrentFrame * find_current_frame() {
+    struct CurrentFrame : public PyObject {
+        PyObject * eval;
+        struct _PyInterpreterFrame * frame;
+        PyThreadState * tstate;
+        PyObject * callback;
+        // vectorcallfunc vectorcall;
 
-        if (cached_thread != PyThreadState_Get()) {
-            PyObject * dict = PyThreadState_GetDict();
-            cached_current = (CurrentFrame *)PyDict_GetItem(dict, interpreter_key);
+        static thread_local std::pair<PyThreadState *, CurrentFrame *> cached;
 
-            if (!cached_current) {
-                cached_current = (CurrentFrame *)CurrentFrame_Type.tp_alloc(&CurrentFrame_Type, 0);
+        static CurrentFrame * find(PyThreadState * tstate) {
+            if (cached.first != tstate) {
+                PyObject * current = PyDict_GetItem(_PyThreadState_GetDict(tstate), key());
+
+                if (!current) {
+                    current = CurrentFrame_Type.tp_alloc(&CurrentFrame_Type, 0);
+                    if (!current) return nullptr;
+            
+                    // current->vectorcall = (vectorcallfunc)CurrentFrame::call_target;
+                    ((CurrentFrame *)current)->callback = nullptr;
+
+                    PyInterpreterState * is =PyThreadState_GetInterpreter(tstate);
+
+                    PyObject * eval = PyDict_GetItemString(PyInterpreterState_GetDict(is), "__retrace__");
+                    ((CurrentFrame *)current)->eval = Py_NewRef(eval);
+                    ((CurrentFrame *)current)->tstate = tstate;
+                }
+                if (Py_TYPE(current) != &CurrentFrame_Type) {
+                    PyErr_Format(PyExc_TypeError, "Internal retrace error, Current frame in thread dict: %S, was not of expected type: %S", current, &CurrentFrame_Type);
+                    return nullptr;
+                }
+                cached.first = tstate;
+                cached.second = (CurrentFrame *)current;
+
+            }
+            return cached.second;
+        }
+
+        _PyFrameEvalFunction evalfunc() {
+            return (_PyFrameEvalFunction)PyCapsule_GetPointer(eval, nullptr);
+        }
+
+        // PyObject * do_call_target(PyObject * new_callback) {
+            
+        //     _PyFrameEvalFunction original = evalfunc();
+        //     if (!original) {
+        //         assert(PyErr_Occurred());
+        //         return nullptr;
+        //     }
+
+        //     if (new_callback == Py_None && Py_REFCNT(eval) == 2) {
+
+        //         PyInterpreterState * is = PyThreadState_GetInterpreter(tstate);
+        //         _PyFrameEvalFunction current = _PyInterpreterState_GetEvalFrameFunc(is);
+
+        //         _PyInterpreterState_SetEvalFrameFunc(is, original);
+
+        //         PyObject * result = original(tstate, frame, 0);
+
+        //         _PyInterpreterState_SetEvalFrameFunc(is, current);
+
+        //         return result;
+        //     } else {
+        //         PyObject * saved = callback;
+        //         callback = new_callback;
+        //         PyObject * result = original(tstate, frame, 0);
+        //         callback = saved;
+        //         return result;
+        //     }
+        // }
+
+        // static PyObject * call_target(CurrentFrame * frame, PyObject *const *args, size_t nargsf, PyObject *kwnames) {
+        //     Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
+
+        //     if (kwnames) {
+        //         PyErr_SetString(PyExc_TypeError, "");
+        //         return nullptr;
+        //     }
+
+        //     if (nargs > 1) {
+        //         PyErr_SetString(PyExc_TypeError, "");
+        //         return nullptr;
+        //     }
+        //     return frame->do_call_target(nargs == 1 ? args[0] : Py_None);
+        // }
+
+        bool handle_callback_result(PyObject * result) {
+            if (!result) {
+                if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
+                    PyErr_Clear();
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+            Py_DECREF(result);
+            return true;
+        }
+
+        bool call_result_callback(PyObject * callback, PyObject * result) {
+            static PyObject * method = nullptr;
+            if (!method) method = PyUnicode_InternFromString("on_result");
+
+            return handle_callback_result(PyObject_CallMethodOneArg(callback, method, result));
+        }
+
+        bool call_error_callback(PyObject * callback, PyObject *exc_type, PyObject *exc_value, PyObject *exc_traceback) {
+            static PyObject * method = nullptr;
+            if (!method) method = PyUnicode_InternFromString("on_error");
+
+            PyObject * res = PyObject_CallMethodObjArgs(callback, method, 
+                exc_type ? exc_type : Py_None, 
+                exc_value ? exc_value : Py_None, 
+                exc_traceback ? exc_traceback : Py_None,
+                nullptr);
+
+            return handle_callback_result(res);
+        }
+
+        bool call_return_callback(PyObject * callback) {
+            static PyObject * method = nullptr;
+            if (!method) method = PyUnicode_InternFromString("on_return");
+
+            return handle_callback_result(PyObject_CallMethodNoArgs(callback, method));
+        }
+
+        PyObject * handle_return(PyObject * callback, PyObject * result) {
+            if (result) {
+                if (!call_return_callback(callback)) return nullptr;
+
+                static PyObject * method = nullptr;
+                if (!method) method = PyUnicode_InternFromString("on_result");
+
+                PyObject * new_result = PyObject_CallMethodOneArg(callback, method, result);
+
+                if (new_result) {
+                    Py_DECREF(result);
+                    return new_result;
+                } else {
+                    if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
+                        PyErr_Clear();
+                        return result;
+                    } else {
+                        Py_DECREF(result);
+                        return nullptr;
+                    }
+                }
+            } else {
+                PyObject * exc[] = {nullptr, nullptr, nullptr};
+                // Fetch the current exception
+                PyErr_Fetch(exc + 0, exc + 1, exc + 2);
+
+                if (!call_return_callback(callback)) {
+                    for (int i = 0; i < 3; i++) Py_XDECREF(exc[i]);
+                    return nullptr;
+                }
                 
-                PyDict_SetItem(dict, interpreter_key, (PyObject *)cached_current);
-                Py_DECREF(cached_current);
+                if (!call_return_callback(callback) ||
+                    !call_error_callback(callback, exc[0], exc[1], exc[2])) {
+                    for (int i = 0; i < 3; i++) Py_XDECREF(exc[i]);
+                    return nullptr;
+                }
+                PyErr_Restore(exc[0], exc[1], exc[2]);
+                return nullptr;
             }
         }
 
-        return cached_current;
-    }
+        PyObject * call_from_intercept(_PyInterpreterFrame * frame, int throwflag) {
+            _PyFrameEvalFunction func = evalfunc();
+            if (!func) {
+                assert(PyErr_Occurred());
+                return nullptr;
+            }
 
-    struct CurrentFrame : public PyObject {
-        struct _PyInterpreterFrame * frame;
+            if (!throwflag && callback && PyCallable_Check(callback)) {
+                this->frame = frame;
+                PyObject * saved_callback = callback;
+                callback = nullptr;
+                callback = PyObject_CallOneArg(saved_callback, this);
+
+                if (!callback) {
+                    assert(PyErr_Occurred());
+                    callback = saved_callback;
+                    return nullptr;    
+                }
+
+                PyObject * result;
+
+                if (!PyCallable_Check(callback) && Py_REFCNT(eval) == 2) {
+                    PyInterpreterState * is = PyThreadState_GetInterpreter(tstate);
+                    _PyFrameEvalFunction saved_func = _PyInterpreterState_GetEvalFrameFunc(is);
+    
+                    _PyInterpreterState_SetEvalFrameFunc(is, func);
+                    result = func(tstate, frame, throwflag);
+                    _PyInterpreterState_SetEvalFrameFunc(is, saved_func);
+                } else {
+                    result = func(tstate, frame, throwflag);
+                }
+
+                PyObject * new_callback = callback;
+                callback = nullptr;
+
+                result = handle_return(new_callback, result);
+
+                Py_DECREF(new_callback);
+                callback = saved_callback;
+                return result;
+            } else {
+                return func(tstate, frame, throwflag);
+            }
+        }
 
         static PyGetSetDef getset[];
         
@@ -90,17 +270,28 @@ namespace retracesoftware {
             return Py_NewRef(self->frame->f_globals ? self->frame->f_globals : Py_None);
         }
 
-        // = {
-        //     // {"pending_keys", (getter)Demultiplexer::pending_getter, nullptr, "TODO", NULL},
-        //     {NULL}  // Sentinel
-        // };
+        static int traverse(CurrentFrame * self, visitproc visit, void* arg) {
+            Py_VISIT(self->callback);
+            Py_VISIT(self->eval);
+            return 0;
+        }
+
+        static int clear(CurrentFrame * self) {
+            Py_CLEAR(self->callback);
+            Py_CLEAR(self->eval);
+            return 0;
+        }
+
+        static void dealloc(CurrentFrame *self) {
+            PyObject_GC_UnTrack(self);          // Untrack from the GC
+            clear(self);
+            Py_TYPE(self)->tp_free(self);  // Free the object
+        }
 
         static PyMemberDef members[];
-        //  = {
-        //     // {"pending", T_OBJECT, OFFSET_OF_MEMBER(Demultiplexer, next), READONLY, "TODO"},
-        //     {NULL}  /* Sentinel */
-        // };
     };
+
+    thread_local std::pair<PyThreadState *, CurrentFrame *> CurrentFrame::cached;
 
     PyGetSetDef CurrentFrame::getset[] = {
         {"function", (getter)CurrentFrame::function_getter, nullptr, "TODO", NULL},
@@ -114,115 +305,18 @@ namespace retracesoftware {
         {NULL}
     };
 
+    // ensure that the PyInterpreterState_Dict has a FrameEval, 
+    // its ref-count should be 1, in this scenario. It is NOT installed at this point
     struct FrameEval : public PyObject {
         _PyFrameEvalFunction frame_eval = nullptr;
-        PyObject * handler;
-        
-        static int traverse(FrameEval* self, visitproc visit, void* arg) {
-            Py_VISIT(self->handler);
-            return 0;
-        }
-
-        static int clear(FrameEval* self) {
-            Py_CLEAR(self->handler);
-            return 0;
-        }
-
-        static void dealloc(FrameEval* self) {
-            PyObject_GC_UnTrack(self);
-            clear(self);
-            Py_TYPE(self)->tp_free(reinterpret_cast<PyObject*>(self));
-        }
     };
 
     static PyObject* wrapper(PyThreadState *tstate, struct _PyInterpreterFrame * frame, int throw_flag) {
+        CurrentFrame * current = CurrentFrame::find(tstate);
+        if (!current) return nullptr;
+        assert(current->tstate == tstate);
 
-        FrameEval * eval = find_frame_eval(PyThreadState_GetInterpreter(tstate));
-
-        if (!callback) {
-            callback = Py_NewRef(eval->handler);
-            PyObject * result = wrapper(tstate, frame, throw_flag);
-            Py_DECREF(callback);
-            return result;
-        }
-
-        if (!PyCallable_Check(callback) || throw_flag) {
-            return eval->frame_eval(tstate, frame, throw_flag);
-        }
-
-        PyObject * saved_callback = callback;
-        CurrentFrame * current = find_current_frame();
-        current->frame = frame;
-
-        callback = Py_None;
-        callback = PyObject_CallOneArg(saved_callback, current);
-
-        PyObject * result = nullptr;
-
-        if (callback) {
-            result = eval->frame_eval(tstate, frame, throw_flag);
-
-            PyObject * handle_res = callback;
-            callback = Py_None;
-
-            if (result) {
-                static PyObject * name = nullptr;
-                if (!name) name = PyUnicode_InternFromString("on_result");
-
-                PyObject * res = PyObject_CallMethodOneArg(handle_res, name, result);
-                if (!res) {
-                    if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
-                        PyErr_Clear();
-                    } else {
-                        Py_DECREF(result);
-                        result = nullptr;
-                    }
-                } else {
-                    Py_DECREF(res);
-                }
-
-            } else {
-
-                assert (PyErr_Occurred());
-
-                PyObject * exc[] = {nullptr, nullptr, nullptr};
-
-                // Fetch the current exception
-                PyErr_Fetch(exc + 0, exc + 1, exc + 2);
-
-                for (int i = 0; i < 3; i++) if (!exc[i]) exc[i] = Py_None;
-
-                static PyObject * name = nullptr;
-                if (!name) name = PyUnicode_InternFromString("on_error");
-                
-                PyObject * res = PyObject_CallMethodObjArgs(handle_res, name, exc[0], exc[1], exc[2], nullptr);
-
-                if (!res) {
-                    if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
-                        PyErr_Clear();
-                        PyErr_Restore(
-                            exc[0] == Py_None ? nullptr : exc[0], 
-                            exc[1] == Py_None ? nullptr : exc[1],
-                            exc[2] == Py_None ? nullptr : exc[2]);
-
-                    } else {
-                        for (int i = 0; i < 3; i++) if (exc[i] != Py_None) Py_DECREF(exc[i]);
-
-                        Py_DECREF(result);
-                        result = nullptr;
-                    }
-                } else {
-                    Py_DECREF(res);
-                    PyErr_Restore(
-                        exc[0] == Py_None ? nullptr : exc[0], 
-                        exc[1] == Py_None ? nullptr : exc[1],
-                        exc[2] == Py_None ? nullptr : exc[2]);
-                }
-            }
-            Py_DECREF(handle_res);
-        }    
-        callback = saved_callback;
-        return result;
+        return current->call_from_intercept(frame, throw_flag);
     }
 
     PyTypeObject CurrentFrame_Type = {
@@ -230,64 +324,60 @@ namespace retracesoftware {
         .tp_name = MODULE "CurrentFrame",
         .tp_basicsize = sizeof(CurrentFrame),
         .tp_itemsize = 0,
-        // .tp_dealloc = (destructor)CurrentFrame::dealloc,
+        .tp_dealloc = (destructor)CurrentFrame::dealloc,
+        // .tp_vectorcall_offset = OFFSET_OF_MEMBER(CurrentFrame, vectorcall),
+        // .tp_call = PyVectorcall_Call,
         .tp_flags = Py_TPFLAGS_DEFAULT,
         .tp_doc = "TODO",
+        .tp_traverse = (traverseproc)CurrentFrame::traverse,
+        .tp_clear = (inquiry)CurrentFrame::clear,
         .tp_members = CurrentFrame::members,
         .tp_getset = CurrentFrame::getset,
     };
 
-    PyTypeObject FrameEval_Type = {
-        .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
-        .tp_name = MODULE "FrameEval",
-        .tp_basicsize = sizeof(FrameEval),
-        .tp_itemsize = 0,
-        .tp_dealloc = (destructor)FrameEval::dealloc,
-        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC,
-        .tp_doc = "TODO",
-        .tp_traverse = (traverseproc)FrameEval::traverse,
-        .tp_clear = (inquiry)FrameEval::clear,
-    };
-
-    void FrameEval_Remove(PyInterpreterState * is) {
-        PyObject * dict = PyInterpreterState_GetDict(is);
-
-        cached_state = nullptr;
-        cached_eval = nullptr;
-
-        if (!interpreter_key) interpreter_key = PyUnicode_InternFromString("__retrace__");
-
-        PyObject * eval = PyDict_GetItem(dict, interpreter_key);
-
-        if (eval) {
-            _PyInterpreterState_SetEvalFrameFunc(is, ((FrameEval *)eval)->frame_eval);
-            PyDict_DelItem(dict, interpreter_key);
-        }
-    }
-
     bool FrameEval_Install(PyInterpreterState * is, PyObject * handler) {
 
-        FrameEval_Remove(is);
+        const char * name =  "__retrace__";
 
-        FrameEval * eval = (FrameEval *)FrameEval_Type.tp_alloc(&FrameEval_Type, 0);
+        PyObject * eval = (FrameEval *)PyDict_GetItemString(PyInterpreterState_GetDict(is), name);
 
         if (!eval) {
-            return false;
+            eval = PyCapsule_New((void *)_PyInterpreterState_GetEvalFrameFunc(is), nullptr, nullptr);
+            if (!eval) return false;
+
+            PyDict_SetItemString(PyInterpreterState_GetDict(is), name, eval);
+            Py_DECREF(eval);
         }
 
-        eval->handler = Py_NewRef(handler);
-        eval->frame_eval = _PyInterpreterState_GetEvalFrameFunc(is);
+        if (handler == Py_None) {
+            PyDict_DelItem(PyThreadState_GetDict(), key());
+            if (Py_REFCNT(eval) == 1) {
+                _PyFrameEvalFunction func = (_PyFrameEvalFunction)PyCapsule_GetPointer(eval, nullptr);
+                _PyInterpreterState_SetEvalFrameFunc(is, func);
+            }
+            return true;
+            
+        } else if (!PyCallable_Check(handler)) {
+            PyErr_Format(PyExc_TypeError, "handler: %S must be None or callable", handler);
+            return false;
 
-        PyObject * dict = PyInterpreterState_GetDict(is);
+        } else {
 
-        // if (!interpreter_key) interpreter_key = PyUnicode_InternFromString("__retrace__");
-        if (!kwnames) kwnames = Py_BuildValue("(s,s,s)", "func", "globals", "locals");
-    
-        _PyInterpreterState_SetEvalFrameFunc(is, wrapper);
+            _PyInterpreterState_SetEvalFrameFunc(is, wrapper);
 
-        PyDict_SetItem(dict, interpreter_key, eval);
+            CurrentFrame * current = CurrentFrame::find(PyThreadState_Get());
 
-        Py_DECREF(eval);
-        return true;
+            if (!current) return false;
+            
+            Py_XDECREF(current->callback);
+            current->callback = Py_NewRef(handler);
+
+            assert(PyCapsule_GetPointer(eval, nullptr) != nullptr);
+
+            current->frame = nullptr;
+
+            PyDict_SetItem(PyThreadState_GetDict(), key(), current);
+            return true;
+        }
     }
 }
