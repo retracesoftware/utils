@@ -138,12 +138,15 @@ namespace retracesoftware {
             static PyObject * method = nullptr;
             if (!method) method = PyUnicode_InternFromString("on_result");
 
+            assert (callback != Py_None);
             return handle_callback_result(PyObject_CallMethodOneArg(callback, method, result));
         }
 
         bool call_error_callback(PyObject * callback, PyObject *exc_type, PyObject *exc_value, PyObject *exc_traceback) {
             static PyObject * method = nullptr;
             if (!method) method = PyUnicode_InternFromString("on_error");
+
+            assert (callback != Py_None);
 
             PyObject * res = PyObject_CallMethodObjArgs(callback, method, 
                 exc_type ? exc_type : Py_None, 
@@ -158,6 +161,7 @@ namespace retracesoftware {
             static PyObject * method = nullptr;
             if (!method) method = PyUnicode_InternFromString("on_return");
 
+            assert (callback != Py_None);
             return handle_callback_result(PyObject_CallMethodNoArgs(callback, method));
         }
 
@@ -202,18 +206,41 @@ namespace retracesoftware {
             }
         }
 
+        // void call_callback() {
+        //     PyObject * saved_callback = callback;
+        //     callback = nullptr;
+        //     callback = PyObject_CallOneArg(saved_callback, this);
+        // }
+
         PyObject * call_from_intercept(_PyInterpreterFrame * frame, int throwflag) {
+
+            // if (tstate->tracing) {
+            //     PyInterpreterState * is = PyThreadState_GetInterpreter(tstate);
+            //     _PyFrameEvalFunction saved_func = _PyInterpreterState_GetEvalFrameFunc(is);
+            //     _PyInterpreterState_SetEvalFrameFunc(is, _PyEval_EvalFrameDefault);
+            //     PyObject * result = _PyEval_EvalFrameDefault(tstate, frame, throwflag);
+            //     _PyInterpreterState_SetEvalFrameFunc(is, saved_func);
+            //     return result;
+            // }
+
             _PyFrameEvalFunction func = evalfunc();
+
             if (!func) {
                 assert(PyErr_Occurred());
                 return nullptr;
             }
 
-            if (!throwflag && callback && PyCallable_Check(callback)) {
+            if (!tstate->tracing && !throwflag && callback && PyCallable_Check(callback)) {
                 this->frame = frame;
                 PyObject * saved_callback = callback;
+                // callback = nullptr;
+                
+                assert(saved_callback != Py_None);
+                
                 callback = nullptr;
                 callback = PyObject_CallOneArg(saved_callback, this);
+
+                // callback = PyObject_CallOneArg(saved_callback, this);
 
                 if (!callback) {
                     assert(PyErr_Occurred());
@@ -222,7 +249,7 @@ namespace retracesoftware {
                 }
 
                 PyObject * result;
-
+                
                 if (!PyCallable_Check(callback) && Py_REFCNT(eval) == 2) {
                     PyInterpreterState * is = PyThreadState_GetInterpreter(tstate);
                     _PyFrameEvalFunction saved_func = _PyInterpreterState_GetEvalFrameFunc(is);
@@ -243,6 +270,7 @@ namespace retracesoftware {
                 callback = saved_callback;
                 return result;
             } else {
+
                 return func(tstate, frame, throwflag);
             }
         }
@@ -334,6 +362,9 @@ namespace retracesoftware {
         .tp_members = CurrentFrame::members,
         .tp_getset = CurrentFrame::getset,
     };
+
+    // static PyObject * sys_setprofile(PyObject *self, PyObject *args)
+    // have something which disable frame eval, can wrap a target callable
 
     bool FrameEval_Install(PyInterpreterState * is, PyObject * handler) {
 

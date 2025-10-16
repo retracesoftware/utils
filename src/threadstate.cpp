@@ -251,6 +251,11 @@ namespace retracesoftware {
         int desired_index,
         bool sticky) {
 
+        if (!PyCallable_Check(function)) {
+            PyErr_Format(PyExc_TypeError, "Cannot wrap %S with for ThreadState as is not callable", function);
+            return nullptr;
+        }
+
         ThreadStateWrapped * self = (ThreadStateWrapped *)ThreadStateWrapped_Type.tp_alloc(&ThreadStateWrapped_Type, 0);
 
         self->thread_state = Py_NewRef(thread_state);
