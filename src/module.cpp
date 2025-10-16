@@ -367,7 +367,18 @@ static PyObject * make_compatible_subtype(PyTypeObject * base) {
     PyObject *bases = PyTuple_Pack(1, (PyObject *)base);
     if (!bases) return NULL;
 
-    PyObject *sub = PyType_FromSpecWithBases(&spec, bases);
+    PyObject * module = PyType_GetModule(base);
+    
+    PyObject *sub;
+
+    if (module) {
+        sub = PyType_FromModuleAndSpec(module, &spec, bases);
+    } else {
+        PyErr_Clear();
+       sub = PyType_FromSpecWithBases(&spec, bases); 
+    }
+    // PyObject *sub = PyType_FromModuleAndSpec(PyType_GetModule(base), &spec, bases);
+    // PyType_FromSpecWithBases(&spec, bases);
     Py_DECREF(bases);
     return sub;   /* New ref or NULL on error */
 }
