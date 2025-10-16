@@ -38,6 +38,16 @@ jobs:
           open(p,'w',encoding='utf-8').write(s)
           PY
 
+      - name: Rewrite project name to -debug
+        run: |
+          python - << 'PY'
+          import re
+          p='pyproject.toml'
+          s=open(p,'r',encoding='utf-8').read()
+          s=re.sub(r'(?m)^name\s*=\s*"[^"]+"', 'name = "retracesoftware_utils_debug"', s)
+          open(p,'w',encoding='utf-8').write(s)
+          PY
+
       - name: Verify tag matches pyproject version
         run: |
           python - << 'PY'
@@ -85,6 +95,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Rewrite project name to -debug (Linux)
+        run: |
+          python - << 'PY'
+          import re
+          p='pyproject.toml'
+          s=open(p,'r',encoding='utf-8').read()
+          s=re.sub(r'(?m)^name\s*=\s*"[^"]+"', 'name = "retracesoftware_utils_debug"', s)
+          open(p,'w',encoding='utf-8').write(s)
+          PY
 
       - name: Verify tag matches pyproject version
         run: |
@@ -144,5 +164,3 @@ jobs:
         with:
           packages-dir: upload
           skip-existing: true
-
-
