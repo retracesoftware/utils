@@ -77,50 +77,6 @@ namespace retracesoftware {
             return (_PyFrameEvalFunction)PyCapsule_GetPointer(eval, nullptr);
         }
 
-        // PyObject * do_call_target(PyObject * new_callback) {
-            
-        //     _PyFrameEvalFunction original = evalfunc();
-        //     if (!original) {
-        //         assert(PyErr_Occurred());
-        //         return nullptr;
-        //     }
-
-        //     if (new_callback == Py_None && Py_REFCNT(eval) == 2) {
-
-        //         PyInterpreterState * is = PyThreadState_GetInterpreter(tstate);
-        //         _PyFrameEvalFunction current = _PyInterpreterState_GetEvalFrameFunc(is);
-
-        //         _PyInterpreterState_SetEvalFrameFunc(is, original);
-
-        //         PyObject * result = original(tstate, frame, 0);
-
-        //         _PyInterpreterState_SetEvalFrameFunc(is, current);
-
-        //         return result;
-        //     } else {
-        //         PyObject * saved = callback;
-        //         callback = new_callback;
-        //         PyObject * result = original(tstate, frame, 0);
-        //         callback = saved;
-        //         return result;
-        //     }
-        // }
-
-        // static PyObject * call_target(CurrentFrame * frame, PyObject *const *args, size_t nargsf, PyObject *kwnames) {
-        //     Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
-
-        //     if (kwnames) {
-        //         PyErr_SetString(PyExc_TypeError, "");
-        //         return nullptr;
-        //     }
-
-        //     if (nargs > 1) {
-        //         PyErr_SetString(PyExc_TypeError, "");
-        //         return nullptr;
-        //     }
-        //     return frame->do_call_target(nargs == 1 ? args[0] : Py_None);
-        // }
-
         bool handle_callback_result(PyObject * result) {
             if (!result) {
                 if (PyErr_ExceptionMatches(PyExc_AttributeError)) {
@@ -162,11 +118,14 @@ namespace retracesoftware {
             if (!method) method = PyUnicode_InternFromString("on_return");
 
             assert (callback != Py_None);
+
             return handle_callback_result(PyObject_CallMethodNoArgs(callback, method));
         }
 
         PyObject * handle_return(PyObject * callback, PyObject * result) {
-            if (result) {
+            if (callback == Py_None) return result;
+
+            if (result) {    
                 if (!call_return_callback(callback)) return nullptr;
 
                 static PyObject * method = nullptr;
@@ -232,28 +191,27 @@ namespace retracesoftware {
 
             if (!tstate->tracing && !throwflag && callback && PyCallable_Check(callback)) {
                 this->frame = frame;
-                PyObject * saved_callback = callback;
-                // callback = nullptr;
-                
-                assert(saved_callback != Py_None);
-                
+
+                PyObject * current_callback = callback;
                 callback = nullptr;
-                callback = PyObject_CallOneArg(saved_callback, this);
 
-                // callback = PyObject_CallOneArg(saved_callback, this);
-
-                if (!callback) {
+                PyObject * new_callback = PyObject_CallOneArg(current_callback, this);
+                
+                if (!new_callback) {
                     assert(PyErr_Occurred());
-                    callback = saved_callback;
+                    callback = current_callback;
                     return nullptr;    
                 }
 
+                // assert (Py_TYPE(new_callback) != &CurrentFrame_Type);
+
+                callback = new_callback;
                 PyObject * result;
-                
+                            
                 if (!PyCallable_Check(callback) && Py_REFCNT(eval) == 2) {
                     PyInterpreterState * is = PyThreadState_GetInterpreter(tstate);
                     _PyFrameEvalFunction saved_func = _PyInterpreterState_GetEvalFrameFunc(is);
-    
+
                     _PyInterpreterState_SetEvalFrameFunc(is, func);
                     result = func(tstate, frame, throwflag);
                     _PyInterpreterState_SetEvalFrameFunc(is, saved_func);
@@ -261,14 +219,15 @@ namespace retracesoftware {
                     result = func(tstate, frame, throwflag);
                 }
 
-                PyObject * new_callback = callback;
                 callback = nullptr;
-
+                this->frame = frame;
+                
                 result = handle_return(new_callback, result);
-
                 Py_DECREF(new_callback);
-                callback = saved_callback;
+
+                callback = current_callback;
                 return result;
+
             } else {
 
                 return func(tstate, frame, throwflag);

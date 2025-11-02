@@ -7,6 +7,9 @@
 #include <tuple>
 
 #include "fastcall.h"
+#include "unordered_dense.h"
+
+using namespace ankerl::unordered_dense;
 
 #define MODULE "retracesoftware_utils."
 
@@ -53,6 +56,7 @@ namespace retracesoftware {
     extern PyTypeObject Proxy_Type;
     extern PyTypeObject Reference_Type;
     extern PyTypeObject WrappedFunction_Type;
+    extern PyTypeObject WrappedMember_Type;
     extern PyTypeObject IdSet_Type;
     extern PyTypeObject IdSetTest_Type;
     extern PyTypeObject IdDict_Type;
@@ -65,8 +69,16 @@ namespace retracesoftware {
     extern PyTypeObject PerThread_Type;
     extern PyTypeObject CurrentFrame_Type;
     extern PyTypeObject NewWrapper_Type;
+    extern PyTypeObject MethodDispatch_Type;
+    extern PyTypeObject Marker_Type;
 
     void force_full_gc(void);
+
+    struct ModuleState {
+        map<PyObject *, PyObject *> obj_to_id;
+    };
+
+    ModuleState* get_module_state(PyObject* module);
 
     PyObject * Wrapped_Target(PyObject * proxy);
 
@@ -78,7 +90,7 @@ namespace retracesoftware {
 
     using Frame = std::tuple<std::string, int, std::string, std::string, std::string>;
 
-    std::vector<Frame> stacktrace();
+    std::vector<Frame> stacktrMarker_Typeace();
     PyObject * stacktrace_as_pyobject(void);
 
     PyObject * create_wrapped(PyTypeObject * cls, PyObject * target);
@@ -107,4 +119,6 @@ namespace retracesoftware {
         PyObject * target;
         PyObject * weakreflist;
     };
+
+    bool set_on_alloc(PyTypeObject *type, PyObject * callback);
 }

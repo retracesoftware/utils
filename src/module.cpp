@@ -1,5 +1,8 @@
 #include "utils.h"
 #include <signal.h>
+#include "unordered_dense.h"
+
+using namespace ankerl::unordered_dense;
 
 // static PyObject * set_type(PyObject * self, PyObject * args, PyObject *kwds) {
 
@@ -30,6 +33,15 @@
 
 //     Py_RETURN_NONE;
 // }
+
+retracesoftware::ModuleState* retracesoftware::get_module_state(PyObject* module) {
+    void* state = PyModule_GetState(module);
+    if (state == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "Cannot get module state");
+        return NULL;
+    }
+    return (retracesoftware::ModuleState*)state;
+}
 
 static PyObject * noop(PyObject *module, PyObject * const * args, size_t nargs, PyObject* kwnames) {
     Py_RETURN_NONE;
@@ -410,7 +422,24 @@ static PyObject * intercept__new__(PyObject * module, PyObject * args, PyObject 
     Py_RETURN_NONE;
 }
 
+static PyObject * set_on_alloc(PyObject * module, PyObject * args, PyObject *kwargs) {
+    PyTypeObject * cls;
+    PyObject * on_alloc;
+
+    static const char *kwlist[] = {"type", "on_alloc", NULL};  // List of keyword
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "O!O", (char **)kwlist, &PyType_Type, &cls, &on_alloc)) {
+        return nullptr;
+    }
+
+    if (!retracesoftware::set_on_alloc(cls, on_alloc)) return nullptr;
+
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef module_methods[] = {
+
+    {"set_on_alloc", (PyCFunction)set_on_alloc, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"intercept_frame_eval", (PyCFunction)intercept_frame_eval, METH_O, "TODO"},
     {"intercept__new__", (PyCFunction)intercept__new__, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"extend_type", extend_type, METH_O, "TODO"},
@@ -443,12 +472,13 @@ static PyMethodDef module_methods[] = {
     {NULL, NULL, 0, NULL}  // Sentinel
 };
 
+
 // Module definition
 static PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
     "retracesoftware_utils",
     "TODO",
-    0,
+    sizeof(retracesoftware::ModuleState),
     module_methods
 };
 
@@ -497,9 +527,16 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         return NULL;
     }
 
+    retracesoftware::ModuleState* state = retracesoftware::get_module_state(module);
+    if (state == NULL) {
+        Py_DECREF(module);
+        return NULL;
+    }
+
+    new (&state->obj_to_id) map<PyObject *, PyObject *>();
+
     PyTypeObject * hidden_types[] = {
         &retracesoftware::ThreadStateWrapped_Type,
-        &retracesoftware::Dispatch_Type,
         &retracesoftware::ThreadStateContext_Type,
         &retracesoftware::StableSetIterator_Type,
         &retracesoftware::IdSetTest_Type,
@@ -511,6 +548,10 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
     };
 
     PyTypeObject * exposed_types[] = {
+        &retracesoftware::Marker_Type,
+        &retracesoftware::Dispatch_Type,
+        &retracesoftware::MethodDispatch_Type,
+        
         // &retracesoftware::NullContext_Type,
         &retracesoftware::Counter_Type,
         &retracesoftware::BlockingCounter_Type,
@@ -529,6 +570,7 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::Wrapped_Type,
         &retracesoftware::Proxy_Type,
         &retracesoftware::WrappedFunction_Type,
+        &retracesoftware::WrappedMember_Type,
         &retracesoftware::Reference_Type,
         &retracesoftware::ThreadSwitchMonitor_Type,
         &retracesoftware::IdSet_Type,

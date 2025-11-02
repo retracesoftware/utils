@@ -62,6 +62,32 @@ namespace retracesoftware {
             return 0;
         }
 
+        PyObject * table() {
+            PyObject * avaliable = ThreadState_AvaliableStates(state);
+
+            assert (PyTuple_Check(avaliable));
+
+            Py_ssize_t n = PyTuple_Size(avaliable);
+
+            PyObject * res = PyDict_New();
+
+            for (Py_ssize_t i = 0; i < n; i++) {
+                PyObject * name = PyTuple_GetItem(avaliable, i);
+
+                PyDict_SetItem(res, name, handlers[i].callable);
+            }
+            return res;
+        }
+
+        static PyObject * dispatch_table(PyObject * cls, PyObject * obj) {
+            if (!PyObject_TypeCheck(obj, &Dispatch_Type)) {
+                PyErr_Format(PyExc_TypeError, "parameter %S not of Dispatch type", obj);
+                return nullptr;
+            }
+            Dispatch * dispatch = reinterpret_cast<Dispatch *>(obj);
+            return dispatch->table();
+        }
+
         static PyObject * repr(Dispatch *self) {
 
             PyObject * avaliable = ThreadState_AvaliableStates(self->state);
@@ -110,6 +136,7 @@ namespace retracesoftware {
     };
 
     static PyMethodDef Dispatch_methods[] = {
+        {"table", (PyCFunction)Dispatch::dispatch_table, METH_O | METH_STATIC, "TODO"},
         // {"set", (PyCFunction)Dispatch::set_classmethod, METH_VARARGS | METH_KEYWORDS | METH_CLASS, "Set the thread-local target"},
         // {"get", (PyCFunction)ThreadLocalProxy::get_classmethod, METH_VARARGS | METH_KEYWORDS | METH_CLASS, "Set the thread-local target"},
         {NULL, NULL, 0, NULL}
@@ -130,11 +157,31 @@ namespace retracesoftware {
         .tp_flags = Py_TPFLAGS_DEFAULT | 
                     Py_TPFLAGS_HAVE_GC | 
                     Py_TPFLAGS_HAVE_VECTORCALL |
-                    Py_TPFLAGS_DISALLOW_INSTANTIATION,
+                    Py_TPFLAGS_DISALLOW_INSTANTIATION |
+                    Py_TPFLAGS_BASETYPE,
         .tp_doc = "TODO",
         .tp_traverse = (traverseproc)Dispatch::traverse,
         .tp_clear = (inquiry)Dispatch::clear,
         .tp_methods = Dispatch_methods,
+    };
+
+    PyTypeObject MethodDispatch_Type = {
+        .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
+        .tp_name = MODULE "method_dispatch",
+        .tp_basicsize = Dispatch_Type.tp_basicsize,
+        .tp_itemsize = 0,
+        .tp_vectorcall_offset = OFFSET_OF_MEMBER(Dispatch, vectorcall),
+        .tp_call = PyVectorcall_Call,
+        .tp_flags = Py_TPFLAGS_DEFAULT | 
+                    Py_TPFLAGS_HAVE_GC | 
+                    Py_TPFLAGS_HAVE_VECTORCALL |
+                    Py_TPFLAGS_METHOD_DESCRIPTOR |
+                    Py_TPFLAGS_DISALLOW_INSTANTIATION,
+        .tp_traverse = Dispatch_Type.tp_traverse,
+        .tp_clear = Dispatch_Type.tp_clear,
+        // .tp_methods = Dispatch_methods,
+        .tp_base = &Dispatch_Type,
+        .tp_descr_get = tp_descr_get,
     };
 
     struct ThreadStateWrapped : public PyObject {
@@ -258,11 +305,13 @@ namespace retracesoftware {
 
         ThreadStateWrapped * self = (ThreadStateWrapped *)ThreadStateWrapped_Type.tp_alloc(&ThreadStateWrapped_Type, 0);
 
-        self->thread_state = Py_NewRef(thread_state);
-        self->desired_index = desired_index;
-        self->function = Py_NewRef(function);
-        self->sticky = sticky;
-        self->vectorcall = (vectorcallfunc)ThreadStateWrapped::call;
+        if (self) {
+            self->thread_state = Py_NewRef(thread_state);
+            self->desired_index = desired_index;
+            self->function = Py_NewRef(function);
+            self->sticky = sticky;
+            self->vectorcall = (vectorcallfunc)ThreadStateWrapped::call;
+        }
         return self;
     }
 
@@ -601,23 +650,16 @@ namespace retracesoftware {
             Py_RETURN_NONE;
         }
         
-        static PyObject * dispatch(ThreadState * self, PyObject * args, PyObject *kwds) {
-            if (PyTuple_Size(args) > 1) {
-                PyErr_Format(PyExc_TypeError, "dispatch takes a single optional positional arguemnt, the default dispatch");
-                return nullptr;
-            }
-
-            PyObject * default_dispatch = PyTuple_Size(args) > 0 ? PyTuple_GetItem(args, 0) : nullptr;
-            
-            Dispatch * dispatch = (Dispatch *)Dispatch_Type.tp_alloc(&Dispatch_Type, PyTuple_Size(self->avaliable_states));
+        PyObject * create_dispatch(PyTypeObject * cls, PyObject * default_dispatch, PyObject *kwds) {
+            Dispatch * dispatch = (Dispatch *)cls->tp_alloc(cls, PyTuple_Size(avaliable_states));
 
             if (!dispatch) return nullptr;
 
             dispatch->vectorcall = (vectorcallfunc)Dispatch::call;
-            dispatch->state = Py_NewRef(self);
+            dispatch->state = Py_NewRef(this);
 
-            for (int i = 0; i < PyTuple_GET_SIZE(self->avaliable_states); i++) {
-                PyObject * key = PyTuple_GET_ITEM(self->avaliable_states, i);
+            for (int i = 0; i < PyTuple_GET_SIZE(avaliable_states); i++) {
+                PyObject * key = PyTuple_GET_ITEM(avaliable_states, i);
 
                 PyObject * val = kwds ? PyDict_GetItem(kwds, key) : nullptr;
 
@@ -636,6 +678,56 @@ namespace retracesoftware {
                 }
             }
             return (PyObject *)dispatch;
+        }
+
+        static PyObject * method_dispatch(ThreadState * self, PyObject * args, PyObject *kwds) {
+            if (PyTuple_Size(args) > 1) {
+                PyErr_Format(PyExc_TypeError, "method_dispatch takes a single optional positional arguemnt, the default dispatch");
+                return nullptr;
+            }
+
+            PyObject * default_dispatch = PyTuple_Size(args) > 0 ? PyTuple_GetItem(args, 0) : nullptr;
+            
+            return self->create_dispatch(&MethodDispatch_Type, default_dispatch, kwds);
+        }
+
+        static PyObject * dispatch(ThreadState * self, PyObject * args, PyObject *kwds) {
+            if (PyTuple_Size(args) > 1) {
+                PyErr_Format(PyExc_TypeError, "dispatch takes a single optional positional arguemnt, the default dispatch");
+                return nullptr;
+            }
+
+            PyObject * default_dispatch = PyTuple_Size(args) > 0 ? PyTuple_GetItem(args, 0) : nullptr;
+            
+            return self->create_dispatch(&Dispatch_Type, default_dispatch, kwds);
+
+            // Dispatch * dispatch = (Dispatch *)Dispatch_Type.tp_alloc(&Dispatch_Type, PyTuple_Size(self->avaliable_states));
+
+            // if (!dispatch) return nullptr;
+
+            // dispatch->vectorcall = (vectorcallfunc)Dispatch::call;
+            // dispatch->state = Py_NewRef(self);
+
+            // for (int i = 0; i < PyTuple_GET_SIZE(self->avaliable_states); i++) {
+            //     PyObject * key = PyTuple_GET_ITEM(self->avaliable_states, i);
+
+            //     PyObject * val = kwds ? PyDict_GetItem(kwds, key) : nullptr;
+
+            //     if (val) {
+            //         dispatch->handlers[i] = FastCall(Py_XNewRef(val));
+            //     } else {
+            //         if (PyErr_Occurred()) {
+            //             Py_DECREF(dispatch);
+            //             return nullptr;
+            //         } else if (default_dispatch) {
+            //             dispatch->handlers[i] = FastCall(Py_XNewRef(default_dispatch));
+            //         } else {
+            //             PyErr_Format(PyExc_TypeError, "unhandled case: %S, an no default dispatch given", key);
+            //             return nullptr;
+            //         }
+            //     }
+            // }
+            // return (PyObject *)dispatch;
         }
 
         static PyObject * wrap(ThreadState * self, PyObject * args, PyObject *kwds) {
@@ -683,7 +775,9 @@ namespace retracesoftware {
         {"predicate", (PyCFunction)ThreadState::predicate, METH_O, "Set the thread-local target"},
         {"wrap", (PyCFunction)ThreadState::wrap, METH_VARARGS | METH_KEYWORDS, "Set the thread-local target"},
         {"dispatch", (PyCFunction)ThreadState::dispatch, METH_VARARGS | METH_KEYWORDS, "Set the thread-local target"},
+        {"method_dispatch", (PyCFunction)ThreadState::method_dispatch, METH_VARARGS | METH_KEYWORDS, "Set the thread-local target"},
         {"set_dispatch", (PyCFunction)ThreadState::set_dispatch, METH_VARARGS | METH_KEYWORDS, "Set the thread-local target"},
+        // {"dispatch_table", (PyCFunction)ThreadState::dispatch_table, METH_O, "TODO"},
         {NULL, NULL, 0, NULL}
     };
 

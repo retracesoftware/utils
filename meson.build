@@ -22,6 +22,7 @@ py.extension_module(
    'src/visitor.cpp',
    'src/wrapped.cpp',
    'src/wrappedfunction.cpp',
+   'src/wrappedmember.cpp',
    'src/reference.cpp',
    'src/threadswitchmonitor.cpp',
    'src/proxy.cpp',
@@ -31,7 +32,9 @@ py.extension_module(
    'src/patchhash.cpp',
    'src/observer.cpp',
    'src/frameeval.cpp',
-   'src/newwrapper.cpp'
+   'src/newwrapper.cpp',
+   'src/marker.cpp',
+   'src/onalloc.cpp'
    ],
   install: true,
 

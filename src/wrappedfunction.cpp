@@ -26,7 +26,7 @@ namespace retracesoftware {
         }
 
         PyObject * call_with_alloca(PyObject* const * args, size_t nargs, PyObject* kwnames) {
-            size_t total_args = nargs + (kwnames ? PyTuple_GET_SIZE(nargs) : 0) + 1;
+            size_t total_args = nargs + (kwnames ? PyTuple_GET_SIZE(kwnames) : 0) + 1;
 
             PyObject ** mem = (PyObject **)alloca(sizeof(PyObject *) * (total_args + 1)) + 1;
 
