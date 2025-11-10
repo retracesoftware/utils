@@ -67,7 +67,10 @@ namespace retracesoftware {
     extern PyTypeObject Observer_Type;
     extern PyTypeObject WeakRefCallback_Type;
     extern PyTypeObject PerThread_Type;
-    extern PyTypeObject CurrentFrame_Type;
+    
+    extern PyTypeObject FrameWrapper_Type;
+    extern PyTypeObject FrameEval_Type;
+    
     extern PyTypeObject NewWrapper_Type;
     extern PyTypeObject MethodDispatch_Type;
     extern PyTypeObject Marker_Type;

@@ -542,7 +542,8 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::IdSetTest_Type,
         &retracesoftware::IdSetLogical_Type,
         &retracesoftware::WeakRefCallback_Type,
-        &retracesoftware::CurrentFrame_Type,
+        &retracesoftware::FrameWrapper_Type,
+        &retracesoftware::FrameEval_Type,
         &retracesoftware::NewWrapper_Type,
         nullptr
     };
