@@ -42,7 +42,12 @@ namespace retracesoftware {
             PyObject * getter = PyObject_GetAttr(self->target, name);
             if (!getter) return nullptr;
 
-            PyObject * result = PyObject_CallFunctionObjArgs(self->handler, getter, instance, type, nullptr);
+            PyObject * result = PyObject_CallFunctionObjArgs(
+                self->handler, 
+                getter, 
+                instance ? instance : Py_None, 
+                type,
+                nullptr);
 
             Py_DECREF(getter);
             return result;
@@ -74,7 +79,7 @@ namespace retracesoftware {
         }
 
         static PyObject * repr(WrappedMember *self) {
-            return PyUnicode_FromFormat("<wrapped_function %S>", self->target);
+            return PyUnicode_FromFormat("<wrapped_member %S>", self->target);
         }
     };
 

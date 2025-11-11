@@ -254,19 +254,23 @@ namespace retracesoftware {
 
         static PyObject * call(ThreadStateWrapped * self, PyObject** args, size_t nargsf, PyObject* kwnames) {
             assert(!PyErr_Occurred());
-            
+            Py_INCREF(self);
+
             int previous = ThreadState_GetIndex(self->thread_state);
 
+            PyObject * result;
             if (previous == self->desired_index) {
-                return PyObject_Vectorcall(self->function, args, nargsf, kwnames);   
+                result = PyObject_Vectorcall(self->function, args, nargsf, kwnames);
             } else {
                 ThreadState_SetIndex(self->thread_state, self->desired_index);
 
-                PyObject * result = PyObject_Vectorcall(self->function, args, nargsf, kwnames);
+                result = PyObject_Vectorcall(self->function, args, nargsf, kwnames);
                 
                 ThreadState_SetIndex(self->thread_state, previous);            
-                return self->wrap_result(result);
+                result = self->wrap_result(result);
             }
+            Py_DECREF(self);
+            return result;
         }
     };
 
