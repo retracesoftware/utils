@@ -37,6 +37,8 @@ namespace retracesoftware {
                 PyObject *exc_type, *exc_value, *exc_tb;
                 PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
                 // PyErr_NormalizeException(&exc_type, &exc_value, &exc_tb);
+                
+                assert(!exc_value || PyObject_TypeCheck(exc_value, (PyTypeObject *)PyExc_BaseException));
 
                 if (exc_value && PyObject_TypeCheck(exc_value, (PyTypeObject *)PyExc_BaseException)) {
                     // Py_INCREF(Py_None);
@@ -49,6 +51,9 @@ namespace retracesoftware {
                     if (PyObject_SetAttrString(exc_value, "__cause__", Py_NewRef(Py_None)) < 0) {
                         raise(SIGTRAP);
                     }
+                    
+                    assert(Py_REFCNT(exc_tb) == 1);
+
                     Py_XDECREF(exc_tb);  // no longer needed
                     PyErr_Restore(exc_type, exc_value, NULL);
                 }
