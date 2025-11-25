@@ -74,6 +74,7 @@ namespace retracesoftware {
     extern PyTypeObject NewWrapper_Type;
     extern PyTypeObject MethodDispatch_Type;
     extern PyTypeObject Marker_Type;
+    extern PyTypeObject DictIntercept_Type;
 
     void force_full_gc(void);
 
@@ -124,4 +125,6 @@ namespace retracesoftware {
     };
 
     bool set_on_alloc(PyTypeObject *type, PyObject * callback);
+
+    bool intercept_dict_set(PyObject * dict, PyObject * on_set);
 }

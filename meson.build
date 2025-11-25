@@ -34,7 +34,8 @@ py.extension_module(
    'src/frameeval.cpp',
    'src/newwrapper.cpp',
    'src/marker.cpp',
-   'src/onalloc.cpp'
+   'src/onalloc.cpp',
+   'src/dictintercept.cpp'
    ],
   install: true,
 

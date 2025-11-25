@@ -437,8 +437,23 @@ static PyObject * set_on_alloc(PyObject * module, PyObject * args, PyObject *kwa
     Py_RETURN_NONE;
 }
 
-static PyMethodDef module_methods[] = {
+static PyObject * intercept_dict_set(PyObject * module, PyObject * args, PyObject *kwargs) {
+    PyObject * dict;
+    PyObject * on_set;
 
+    static const char *kwlist[] = {"dict", "on_set", NULL};  // List of keyword
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "OO", (char **)kwlist, &dict, &on_set)) {
+        return nullptr;
+    }
+
+    if (!retracesoftware::intercept_dict_set(dict, on_set)) return nullptr;
+
+    Py_RETURN_NONE;
+}
+
+static PyMethodDef module_methods[] = {
+    {"intercept_dict_set", (PyCFunction)intercept_dict_set, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"set_on_alloc", (PyCFunction)set_on_alloc, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"intercept_frame_eval", (PyCFunction)intercept_frame_eval, METH_O, "TODO"},
     {"intercept__new__", (PyCFunction)intercept__new__, METH_VARARGS | METH_KEYWORDS, "TODO"},
@@ -545,6 +560,7 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::FrameWrapper_Type,
         &retracesoftware::FrameEval_Type,
         &retracesoftware::NewWrapper_Type,
+        &retracesoftware::DictIntercept_Type,
         nullptr
     };
 

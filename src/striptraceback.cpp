@@ -84,6 +84,11 @@ namespace retracesoftware {
         }
     };
 
+    PyMemberDef members[] = {
+        {"__wrapped__", T_OBJECT, OFFSET_OF_MEMBER(StripTraceback, target), READONLY, "TODO"},
+        {NULL}
+    };
+
     PyTypeObject StripTraceback_Type = {
         .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
         .tp_name = MODULE "striptraceback",
@@ -99,6 +104,7 @@ namespace retracesoftware {
         .tp_traverse = (traverseproc)StripTraceback::traverse,
         .tp_clear = (inquiry)StripTraceback::clear,
         // .tp_methods = StubProxy_methods,
+        .tp_members = members,
         // .tp_base = &Proxy_Type,
         .tp_descr_get = StripTraceback::tp_descr_get,
         .tp_init = (initproc)StripTraceback::init,

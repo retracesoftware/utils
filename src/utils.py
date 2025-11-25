@@ -4,6 +4,7 @@ import weakref
 import threading
 from collections import UserDict
 from typing import Callable, Any
+from contextlib import contextmanager
 
 def typeflags(cls):
     
@@ -105,7 +106,7 @@ def update(obj, name, f, *args, **kwargs):
 from typing import Dict, Any
 
 class InterceptDict(dict):
-    def __init__(self, initial: Dict, on_set: Callable[[str, Any], Any]):
+    def __init__(self, backing: Dict, on_set: Callable[[str, Any], Any]):
         """
         A dictionary-like class that wraps an existing dictionary and calls a callback
         to potentially modify values before they are added or updated.
@@ -116,8 +117,13 @@ class InterceptDict(dict):
             *args: Iterable of key-value pairs to update the underlying dict.
             **kwargs: Keyword arguments to update the underlying dict.
         """
-        super().__init__(initial)
+        super().__init__()
+        self.backing = backing
         self.on_set = on_set
+        self.move_from_backing()
+        # self.fallback = initial
+
+        # store the dict version on the backing object
 
         # Process additional items through the callback
         # updates = dict(*args, **kwargs)
@@ -125,9 +131,20 @@ class InterceptDict(dict):
         #     modified_value = self.on_set(key, value)
         #     self._dict[key] = modified_value
 
+    def move_from_backing(self):
+        for key,value in self.backing.items():
+            super().__setitem__(key, self.on_set(key, value))
+        self.backing.clear()
+
+    def __getitem__(self, key):
+        self.move_from_backing()
+        return super().__getitem__(key)
+            
     def __setitem__(self, key: str, value: Any) -> None:
         """Set an item in the underlying dict, modifying the value via callback."""
+        self.move_from_backing()
         super().__setitem__(key, self.on_set(key, value))
+    
 
     # def update(self, *args, **kwargs) -> None:
     #     """Update the underlying dict, processing values through the callback."""
@@ -137,3 +154,9 @@ class InterceptDict(dict):
     
 def map_values(f, m):
     return {k: f(v) for k,v in m.items()}
+
+@contextmanager
+def on_set(dict, on_set):
+    _utils.intercept_dict_set(dict, on_set)
+    yield
+    _utils.intercept_dict_set(dict, None)
