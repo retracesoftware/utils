@@ -1,6 +1,7 @@
 #include "utils.h"
 #include <signal.h>
 #include "unordered_dense.h"
+#include <internal/pycore_frame.h>
 
 using namespace ankerl::unordered_dense;
 
@@ -45,6 +46,10 @@ retracesoftware::ModuleState* retracesoftware::get_module_state(PyObject* module
 
 static PyObject * noop(PyObject *module, PyObject * const * args, size_t nargs, PyObject* kwnames) {
     Py_RETURN_NONE;
+}
+
+static _PyInterpreterFrame * get_top_frame() {
+    return PyThreadState_Get()->cframe->current_frame;
 }
 
 static PyObject * type_flags(PyObject * module, PyObject * arg) {
@@ -395,6 +400,26 @@ static PyObject * make_compatible_subtype(PyTypeObject * base) {
     return sub;   /* New ref or NULL on error */
 }
 
+static PyObject * build_stack_functions(Py_ssize_t size, _PyInterpreterFrame * frame) {
+    if (frame) {
+        if (frame->f_func) {
+            PyObject * result = build_stack_functions(size + 1, frame->previous);
+            if (result) {
+                PyList_SetItem(result, PyList_Size(result) - size - 1, Py_NewRef((PyObject *)frame->f_func));
+            }
+            return result;
+        } else {
+            return build_stack_functions(size, frame->previous);
+        }
+    } else {
+        return PyList_New(size);
+    }
+}
+
+static PyObject * stack_functions(PyObject * module, PyObject * unused) {
+    return build_stack_functions(0, get_top_frame());
+}
+
 static PyObject * extend_type(PyObject * module, PyObject * obj) {
 
     if (!PyType_Check(obj)) {
@@ -454,6 +479,7 @@ static PyObject * intercept_dict_set(PyObject * module, PyObject * args, PyObjec
 
 static PyMethodDef module_methods[] = {
     {"intercept_dict_set", (PyCFunction)intercept_dict_set, METH_VARARGS | METH_KEYWORDS, "TODO"},
+    {"stack_functions", (PyCFunction)stack_functions, METH_NOARGS, "TODO"},
     {"set_on_alloc", (PyCFunction)set_on_alloc, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"intercept_frame_eval", (PyCFunction)intercept_frame_eval, METH_O, "TODO"},
     {"intercept__new__", (PyCFunction)intercept__new__, METH_VARARGS | METH_KEYWORDS, "TODO"},
