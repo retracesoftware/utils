@@ -2,6 +2,7 @@
 #include <signal.h>
 #include "unordered_dense.h"
 #include <internal/pycore_frame.h>
+#include <execinfo.h>
 
 using namespace ankerl::unordered_dense;
 
@@ -477,7 +478,25 @@ static PyObject * intercept_dict_set(PyObject * module, PyObject * args, PyObjec
     Py_RETURN_NONE;
 }
 
+static PyObject * print_stack_trace(PyObject * module, PyObject * unused) {
+    void *array[100];
+    int size = backtrace(array, 100);
+    
+    printf("Stack trace (%d frames):\n", size);
+    char **strings = backtrace_symbols(array, size);
+    
+    for (int i = 0; i < size; i++) {
+        printf("  %s\n", strings[i]);
+    }
+    
+    free(strings);
+
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef module_methods[] = {
+    {"is_entry_frame", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
+    {"print_c_stack_trace", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
     {"intercept_dict_set", (PyCFunction)intercept_dict_set, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"stack_functions", (PyCFunction)stack_functions, METH_NOARGS, "TODO"},
     {"set_on_alloc", (PyCFunction)set_on_alloc, METH_VARARGS | METH_KEYWORDS, "TODO"},

@@ -303,7 +303,8 @@ namespace retracesoftware {
         bool sticky) {
 
         if (!PyCallable_Check(function)) {
-            PyErr_Format(PyExc_TypeError, "Cannot wrap %S with for ThreadState as is not callable", function);
+            PyObject * name = ThreadState_ValueForIndex(thread_state, desired_index);
+            PyErr_Format(PyExc_TypeError, "Cannot wrap %S with state: \"%S\" as %S is not callable", function, name, function);
             return nullptr;
         }
 

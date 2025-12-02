@@ -103,14 +103,23 @@ namespace retracesoftware {
             if (tstate->tracing || throw_flag || in_callback) {
                 return real_eval(tstate, frame, throw_flag);
             }
-
+            
             FrameWrapper * frame_wrapper = (FrameWrapper *)FrameWrapper_Type.tp_alloc(&FrameWrapper_Type, 0);
 
             if (!frame_wrapper) return nullptr;
             frame_wrapper->frame = frame;
 
             in_callback = true;
+            
+            Py_tracefunc trace_func = tstate->c_tracefunc;
+            Py_tracefunc profile_func = tstate->c_profilefunc;
+            tstate->c_tracefunc = tstate->c_profilefunc = nullptr;
+
             PyObject * on_return = PyObject_CallOneArg(callback, frame_wrapper);
+            
+            tstate->c_tracefunc = trace_func;
+            tstate->c_profilefunc = profile_func;
+
             in_callback = false;
 
             if (!on_return) {
@@ -149,15 +158,19 @@ namespace retracesoftware {
                 }
             }
 
+
             PyObject * result = real_eval(tstate, frame, throw_flag);
 
             if (on_return != Py_None) {
                 in_callback = true;
+                tstate->c_tracefunc = tstate->c_profilefunc = nullptr;
+                
                 if (result) {
+
                     PyObject * res = PyTuple_Check(on_return) 
                         ? PyObject_CallOneArg(PyTuple_GET_ITEM(on_return, 0), result)
                         : PyObject_CallNoArgs(on_return);
-                    
+
                     if (res) {
                         Py_DECREF(res);
                     } else {
@@ -173,7 +186,7 @@ namespace retracesoftware {
                     PyObject * res = PyTuple_Check(on_return) 
                         ? PyObject_CallFunctionObjArgs(PyTuple_GET_ITEM(on_return, 1), exc[0], exc[1], exc[2], nullptr)
                         : PyObject_CallNoArgs(on_return);
-
+                    
                     if (res) {
                         Py_DECREF(res);
                         PyErr_Restore(exc[0], exc[1], exc[2]);
@@ -183,6 +196,9 @@ namespace retracesoftware {
                         Py_XDECREF(exc[2]);
                     }
                 }
+                tstate->c_tracefunc = trace_func;
+                tstate->c_profilefunc = profile_func;
+
                 in_callback = false;
             }
             Py_DECREF(on_return);
