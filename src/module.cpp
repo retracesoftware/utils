@@ -124,7 +124,8 @@ static PyObject * raise_exception(PyObject * module, PyObject * const * args, si
         PyErr_SetString(PyExc_TypeError, "raise_exception takes two arguments, type and exception");
         return nullptr;
     }
-    PyErr_SetObject(args[0], Py_NewRef(args[1]));
+    PyErr_SetObject(args[0], args[1]);
+    // PyErr_SetObject(args[0], Py_NewRef(args[1]));
     // PyErr_Restore(args[0], args[1], nullptr);
     // PyErr_Restore(Py_NewRef(args[0]), Py_NewRef(args[1]), nullptr);
     return NULL;
@@ -498,7 +499,7 @@ static PyMethodDef module_methods[] = {
     {"is_entry_frame", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
     {"print_c_stack_trace", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
     {"intercept_dict_set", (PyCFunction)intercept_dict_set, METH_VARARGS | METH_KEYWORDS, "TODO"},
-    {"stack_functions", (PyCFunction)stack_functions, METH_NOARGS, "TODO"},
+    {"stack_functions", (PyCFunction)stack_functions, METH_NOARGS, "Returns list of functions in current stack"},
     {"set_on_alloc", (PyCFunction)set_on_alloc, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"intercept_frame_eval", (PyCFunction)intercept_frame_eval, METH_O, "TODO"},
     {"intercept__new__", (PyCFunction)intercept__new__, METH_VARARGS | METH_KEYWORDS, "TODO"},
