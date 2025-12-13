@@ -1,4 +1,6 @@
 #pragma once
+#include "defines.h"
+
 #include <Python.h>
 #include <functional>
 #include <signal.h>
@@ -11,11 +13,6 @@
 
 using namespace ankerl::unordered_dense;
 
-#define MODULE "retracesoftware_utils."
-
-#define OFFSET_OF_MEMBER(type, member) \
-    ((Py_ssize_t) &reinterpret_cast<const volatile char&>((((type*)0)->member)))
-
 void dump_stack_trace(PyThreadState * tstate);
 
 #define CHECK_CALLABLE(name) \
@@ -27,9 +24,9 @@ void dump_stack_trace(PyThreadState * tstate);
         } \
     }
 
+extern "C" int generation_to_collect(int multiplier);
+
 namespace retracesoftware {
-
-
 
     // extern PyTypeObject NullContext_Type;
 
@@ -75,6 +72,8 @@ namespace retracesoftware {
     extern PyTypeObject MethodDispatch_Type;
     extern PyTypeObject Marker_Type;
     extern PyTypeObject DictIntercept_Type;
+    extern PyTypeObject CollectPred_Type;
+    extern PyTypeObject RunAll_Type;
 
     void force_full_gc(void);
 

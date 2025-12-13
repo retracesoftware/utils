@@ -495,7 +495,20 @@ static PyObject * print_stack_trace(PyObject * module, PyObject * unused) {
     Py_RETURN_NONE;
 }
 
+// static PyObject * generation_to_collect(PyObject * module, PyObject * multiplier) {
+//     long m = PyLong_AsLong(multiplier);
+
+//     if (m == -1 && PyErr_Occurred()) {
+//         return nullptr;
+//     }
+
+//     int gen = retracesoftware::generation_to_collect(m);
+
+//     return gen == -1 ? Py_NewRef(Py_None) : PyLong_FromLong(gen);
+// }
+
 static PyMethodDef module_methods[] = {
+    // {"generation_to_collect", (PyCFunction)generation_to_collect, METH_O, "TODO"},
     {"is_entry_frame", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
     {"print_c_stack_trace", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
     {"intercept_dict_set", (PyCFunction)intercept_dict_set, METH_VARARGS | METH_KEYWORDS, "TODO"},
@@ -641,6 +654,8 @@ PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
         &retracesoftware::StripTraceback_Type,
         &retracesoftware::Observer_Type,
         &retracesoftware::PerThread_Type,
+        &retracesoftware::CollectPred_Type,
+        &retracesoftware::RunAll_Type,
         NULL
     };
 

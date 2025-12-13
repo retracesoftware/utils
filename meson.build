@@ -1,5 +1,5 @@
 # meson.build
-project('retracesoftware_utils', 'cpp', default_options: ['cpp_std=c++20'])
+project('retracesoftware_utils', ['cpp', 'c'], default_options: ['cpp_std=c++20'])
 
 # Bind to the interpreter Meson/meson-python wants us to use.
 py = import('python').find_installation()
@@ -35,7 +35,10 @@ py.extension_module(
    'src/newwrapper.cpp',
    'src/marker.cpp',
    'src/onalloc.cpp',
-   'src/dictintercept.cpp'
+   'src/dictintercept.cpp',
+   'src/generation.c',
+   'src/gccollectpred.cpp',
+   'src/runall.cpp',
    ],
   install: true,
 
