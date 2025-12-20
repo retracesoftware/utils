@@ -39,7 +39,9 @@ namespace retracesoftware {
                 // PyErr_NormalizeException(&exc_type, &exc_value, &exc_tb);
             
                 printf("strip_straceback, exc_value: %p\n", exc_value);
-
+                if (exc_value)
+                    printf("strip_straceback, exc_value type: %s\n", Py_TYPE(exc_value)->tp_name);
+                
                 assert(!exc_value || PyObject_TypeCheck(exc_value, (PyTypeObject *)PyExc_BaseException));
 
                 if (exc_value && PyObject_TypeCheck(exc_value, (PyTypeObject *)PyExc_BaseException)) {
