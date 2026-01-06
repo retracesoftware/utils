@@ -2,7 +2,7 @@
 #include <signal.h>
 #include "unordered_dense.h"
 #include <internal/pycore_frame.h>
-#include <execinfo.h>
+// #include <execinfo.h>
 
 #if PY_VERSION_HEX >= 0x030C0000  // Python 3.12 or higher
 static PyObject * get_func(_PyInterpreterFrame * frame) {
@@ -489,21 +489,21 @@ static PyObject * intercept_dict_set(PyObject * module, PyObject * args, PyObjec
     Py_RETURN_NONE;
 }
 
-static PyObject * print_stack_trace(PyObject * module, PyObject * unused) {
-    void *array[100];
-    int size = backtrace(array, 100);
+// static PyObject * print_stack_trace(PyObject * module, PyObject * unused) {
+//     void *array[100];
+//     int size = backtrace(array, 100);
     
-    printf("Stack trace (%d frames):\n", size);
-    char **strings = backtrace_symbols(array, size);
+//     printf("Stack trace (%d frames):\n", size);
+//     char **strings = backtrace_symbols(array, size);
     
-    for (int i = 0; i < size; i++) {
-        printf("  %s\n", strings[i]);
-    }
+//     for (int i = 0; i < size; i++) {
+//         printf("  %s\n", strings[i]);
+//     }
     
-    free(strings);
+//     free(strings);
 
-    Py_RETURN_NONE;
-}
+//     Py_RETURN_NONE;
+// }
 
 // static PyObject * generation_to_collect(PyObject * module, PyObject * multiplier) {
 //     long m = PyLong_AsLong(multiplier);
@@ -519,8 +519,8 @@ static PyObject * print_stack_trace(PyObject * module, PyObject * unused) {
 
 static PyMethodDef module_methods[] = {
     // {"generation_to_collect", (PyCFunction)generation_to_collect, METH_O, "TODO"},
-    {"is_entry_frame", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
-    {"print_c_stack_trace", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
+    // {"is_entry_frame", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
+    // {"print_c_stack_trace", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
     {"intercept_dict_set", (PyCFunction)intercept_dict_set, METH_VARARGS | METH_KEYWORDS, "TODO"},
     {"stack_functions", (PyCFunction)stack_functions, METH_NOARGS, "Returns list of functions in current stack"},
     {"set_on_alloc", (PyCFunction)set_on_alloc, METH_VARARGS | METH_KEYWORDS, "TODO"},
