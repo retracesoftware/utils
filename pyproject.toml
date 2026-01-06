@@ -2,7 +2,11 @@
 name = "retracesoftware_utils"
 version = "0.1.40"
 license = {text = "Apache-2.0"}
+dependencies = [
+    "retracesoftware.functional~=0.3.5"
+]
 
 [build-system]
 requires = ["meson-python>=0.15.0"]
 build-backend = "mesonpy"
+
