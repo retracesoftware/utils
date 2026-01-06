@@ -1,7 +1,25 @@
 [project]
 name = "retracesoftware_utils"
-version = "0.1.40"
+dynamic = ["version"]
 license = {text = "Apache-2.0"}
+authors = [
+    {name = "Retrace Software", email = "info@retracesoftware.com"}
+]
+maintainers = [
+    {name = "Retrace Software", email = "info@retracesoftware.com"}
+]
+keywords = ["functional", "programming", "c-extension", "utilities", "performance"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
 dependencies = [
     "retracesoftware.functional~=0.3.5"
 ]
