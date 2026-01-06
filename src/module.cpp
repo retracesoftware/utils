@@ -4,6 +4,16 @@
 #include <internal/pycore_frame.h>
 #include <execinfo.h>
 
+#if PY_VERSION_HEX >= 0x030C0000  // Python 3.12 or higher
+static PyObject * get_func(_PyInterpreterFrame * frame) {
+    return frame->f_funcobj;
+}
+#else
+static PyObject * get_func(_PyInterpreterFrame * frame) {
+    return (PyObject *)frame->f_func;
+}
+#endif
+
 using namespace ankerl::unordered_dense;
 
 // static PyObject * set_type(PyObject * self, PyObject * args, PyObject *kwds) {
@@ -404,10 +414,10 @@ static PyObject * make_compatible_subtype(PyTypeObject * base) {
 
 static PyObject * build_stack_functions(Py_ssize_t size, _PyInterpreterFrame * frame) {
     if (frame) {
-        if (frame->f_func) {
+        if (get_func(frame)) {
             PyObject * result = build_stack_functions(size + 1, frame->previous);
             if (result) {
-                PyList_SetItem(result, PyList_Size(result) - size - 1, Py_NewRef((PyObject *)frame->f_func));
+                PyList_SetItem(result, PyList_Size(result) - size - 1, Py_NewRef((PyObject *)get_func(frame)));
             }
             return result;
         } else {
