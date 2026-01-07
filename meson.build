@@ -2,7 +2,7 @@
 project(
   'retracesoftware_utils', 
   ['cpp', 'c'], 
-  version: '0.2.2',
+  version: run_command('python', '-m', 'setuptools_scm', check: true, capture: true).stdout().strip(),
   default_options: ['cpp_std=c++20'])
 
 # Bind to the interpreter Meson/meson-python wants us to use.

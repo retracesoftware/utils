@@ -25,6 +25,9 @@ dependencies = [
 ]
 
 [build-system]
-requires = ["meson-python>=0.15.0"]
+requires = [
+    "meson-python>=0.15.0", 
+    "setuptools_scm>=8.0.4"]
+    
 build-backend = "mesonpy"
 
