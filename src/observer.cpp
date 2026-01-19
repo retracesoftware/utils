@@ -59,6 +59,9 @@ namespace retracesoftware {
             // Fetch the current exception
             PyErr_Fetch(exc + 0, exc + 1, exc + 2);
 
+            // Normalize the exception - ensures exc[1] is an instance, not a string
+            PyErr_NormalizeException(&exc[0], &exc[1], &exc[2]);
+
             for (int i = 0; i < 3; i++) if (!exc[i]) exc[i] = Py_None;
 
             if (!call_void(PyObject_Vectorcall, self->on_error, exc, 3, nullptr)) {
