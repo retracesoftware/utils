@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-_utils = pytest.importorskip("retracesoftware_utils")
+_utils = pytest.importorskip("retracesoftware.utils")
 
 try:
     import retracesoftware.utils as utils
