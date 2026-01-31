@@ -6,7 +6,18 @@
 
 #if PY_VERSION_HEX >= 0x030C0000  // Python 3.12 or higher
 static PyObject * get_func(_PyInterpreterFrame * frame) {
-    return frame->f_funcobj;
+    // In Python 3.12+, check owner to ensure frame is a real Python frame
+    // Owner == FRAME_OWNED_BY_FRAME_OBJECT indicates a valid Python frame
+    // f_funcobj might be invalid/garbage on internal frames
+    if (frame->owner == FRAME_OWNED_BY_FRAME_OBJECT || 
+        frame->owner == FRAME_OWNED_BY_GENERATOR ||
+        frame->owner == FRAME_OWNED_BY_THREAD) {
+        PyObject * func = frame->f_funcobj;
+        if (func && Py_IS_TYPE(func, &PyFunction_Type)) {
+            return func;
+        }
+    }
+    return NULL;
 }
 #else
 static PyObject * get_func(_PyInterpreterFrame * frame) {
@@ -414,10 +425,11 @@ static PyObject * make_compatible_subtype(PyTypeObject * base) {
 
 static PyObject * build_stack_functions(Py_ssize_t size, _PyInterpreterFrame * frame) {
     if (frame) {
-        if (get_func(frame)) {
+        PyObject * func = get_func(frame);
+        if (func) {
             PyObject * result = build_stack_functions(size + 1, frame->previous);
             if (result) {
-                PyList_SetItem(result, PyList_Size(result) - size - 1, Py_NewRef((PyObject *)get_func(frame)));
+                PyList_SetItem(result, PyList_Size(result) - size - 1, Py_NewRef(func));
             }
             return result;
         } else {
