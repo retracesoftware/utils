@@ -557,10 +557,20 @@ static PyMethodDef module_methods[] = {
 };
 
 
+// Module name macros - allows building as _release or _debug
+#ifndef MODULE_NAME
+#define MODULE_NAME retracesoftware_utils
+#endif
+
+#define _STR(x) #x
+#define STR(x) _STR(x)
+#define _CONCAT(a, b) a##b
+#define CONCAT(a, b) _CONCAT(a, b)
+
 // Module definition
 static PyModuleDef moduledef = {
     PyModuleDef_HEAD_INIT,
-    "retracesoftware_utils",
+    STR(MODULE_NAME),
     "TODO",
     sizeof(retracesoftware::ModuleState),
     module_methods
@@ -601,7 +611,7 @@ static PyObject * create_type_flags() {
 }
 
 // Module initialization
-PyMODINIT_FUNC PyInit_retracesoftware_utils(void) {
+PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
     PyObject* module;
 
     // Create the module

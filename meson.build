@@ -1,52 +1,21 @@
-# meson.build
+# meson.build - Project configuration + shared build logic
+
 project(
-  'retracesoftware_utils', 
-  ['cpp', 'c'], 
+  '_retracesoftware_utils',
+  ['cpp', 'c'],
   version: run_command('python', '-m', 'setuptools_scm', check: true, capture: true).stdout().strip(),
-  default_options: ['cpp_std=c++20'])
+  default_options: ['cpp_std=c++20', 'strip=false'])
 
-# Bind to the interpreter Meson/meson-python wants us to use.
-py = import('python').find_installation()
+# Project-specific configuration
+rs_extension_name = '_retracesoftware_utils'
+rs_cpp_source_dir = 'cpp'
+rs_ext_install_subdir = ''
+rs_extra_sources = files('cpp/generation.c')
 
-py.install_sources(
-  'src/utils.py',
-  subdir: 'retracesoftware')
+# Custom Python installs (different destinations)
+py = import('python').find_installation(pure: false)
+py.install_sources('src/retracesoftware/utils.py', subdir: 'retracesoftware')
+py.install_sources('src/retracesoftware/utils/__init__.py', subdir: 'retracesoftware/utils')
 
-py.extension_module(
-  'retracesoftware_utils',
-  ['src/module.cpp',
-   'src/stableset.cpp',
-   'src/counter.cpp',
-   'src/demux.cpp',
-   'src/threadstate.cpp',
-   'src/striptraceback.cpp',
-   'src/stacktrace.cpp',
-   'src/fastset.cpp',
-   'src/instancecheck.cpp',
-   'src/visitor.cpp',
-   'src/wrapped.cpp',
-   'src/wrappedfunction.cpp',
-   'src/wrappedmember.cpp',
-   'src/reference.cpp',
-   'src/threadswitchmonitor.cpp',
-   'src/proxy.cpp',
-   'src/idset.cpp',
-   'src/iddict.cpp',
-   'src/perthread.cpp',
-   'src/patchhash.cpp',
-   'src/observer.cpp',
-   'src/frameeval.cpp',
-   'src/newwrapper.cpp',
-   'src/marker.cpp',
-   'src/onalloc.cpp',
-   'src/dictintercept.cpp',
-   'src/generation.c',
-   'src/gccollectpred.cpp',
-   'src/runall.cpp',
-   ],
-  install: true,
-
-  # If you want extra flags:
-  # cpp_args: ['-O3', '-fvisibility=hidden'],
-  include_directories: include_directories('common-headers/include'),
-)
+# Include shared build logic (builds release/debug modules)
+subdir('common-headers/meson')

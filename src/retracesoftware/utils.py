@@ -1,5 +1,8 @@
 import retracesoftware_utils as _utils
 from retracesoftware_utils import *
+
+# Re-export DEBUG_MODE from the wrapper
+DEBUG_MODE = _utils.DEBUG_MODE
 import weakref
 import threading
 from collections import UserDict
