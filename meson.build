@@ -11,11 +11,8 @@ rs_extension_name = '_retracesoftware_utils'
 rs_cpp_source_dir = 'cpp'
 rs_ext_install_subdir = ''
 rs_extra_sources = files('cpp/generation.c')
-
-# Custom Python installs (different destinations)
-py = import('python').find_installation(pure: false)
-py.install_sources('src/retracesoftware/utils.py', subdir: 'retracesoftware')
-py.install_sources('src/retracesoftware/utils/__init__.py', subdir: 'retracesoftware/utils')
+rs_py_sources = ['src/retracesoftware/utils/__init__.py']
+rs_py_install_subdir = 'retracesoftware/utils'
 
 # Include shared build logic (builds release/debug modules)
 subdir('common-headers/meson')
