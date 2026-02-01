@@ -155,3 +155,43 @@ def test_observer_hooks_and_error_handling():
     assert isinstance(exc_value, RuntimeError)
     assert exc_tb is None or hasattr(exc_tb, "tb_frame")
 
+
+def test_stack_functions_returns_list_of_functions():
+    """Test that stack_functions() returns a valid list without crashing.
+    
+    This tests the fix for a segfault in Python 3.12+ where internal frames
+    could have invalid f_funcobj pointers.
+    """
+    def inner():
+        return _utils.stack_functions()
+    
+    def outer():
+        return inner()
+    
+    # Call through nested functions to ensure we have a real stack
+    result = outer()
+    
+    # Should return a list
+    assert isinstance(result, list)
+    
+    # Should have at least our functions in the stack
+    assert len(result) >= 2
+    
+    # All items should be callable (functions)
+    for func in result:
+        assert callable(func), f"Expected callable, got {type(func)}"
+
+
+def test_stack_functions_from_lambda():
+    """Test stack_functions works when called from a lambda."""
+    get_stack = lambda: _utils.stack_functions()
+    result = get_stack()
+    assert isinstance(result, list)
+
+
+def test_stack_functions_from_comprehension():
+    """Test stack_functions works in list comprehension context."""
+    # List comprehensions create their own frames in Python 3
+    result = [_utils.stack_functions() for _ in range(1)][0]
+    assert isinstance(result, list)
+
