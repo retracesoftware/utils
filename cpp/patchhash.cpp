@@ -198,39 +198,16 @@ namespace retracesoftware {
 
     /**
      * Pre-cache hashes for all existing instances of a type before patching.
-     * 
+     *
+     * Uses gc.get_objects() via Python C API calls to iterate all GC-tracked objects.
      * This is critical for correctness: objects already stored in dicts/sets
      * were placed there based on their original hash. If we change the hash
      * function without caching old values, those objects become "lost" -
      * lookups will search the wrong bucket and never find them.
-     * 
-     * Uses PyUnstable_GC_VisitObjects (Python 3.12+) to efficiently iterate
-     * all GC-tracked objects without building an intermediate list.
+     *
+     * Note: PyUnstable_GC_VisitObjects (Python 3.12+) was tried but it doesn't
+     * seem to visit all GC objects reliably, so we use gc.get_objects() instead.
      */
-
-#if PY_VERSION_HEX >= 0x030C0000  // Python 3.12+
-
-    // Callback for PyUnstable_GC_VisitObjects
-    static int cache_hash_visitor(PyObject* obj, void* arg) {
-        PyTypeObject* cls = (PyTypeObject*)arg;
-        
-        if (PyObject_TypeCheck(obj, cls)) {
-            Py_hash_t old_hash = PyObject_Hash(obj);
-            if (old_hash != -1) {
-                hashes[obj] = old_hash;
-            } else {
-                PyErr_Clear();  // Object wasn't hashable, skip it
-            }
-        }
-        return 0;  // Continue iteration
-    }
-
-    static void cache_existing_instance_hashes(PyTypeObject* cls) {
-        PyUnstable_GC_VisitObjects(cache_hash_visitor, (void*)cls);
-    }
-
-#else  // Python < 3.12: fall back to gc.get_objects()
-
     static void cache_existing_instance_hashes(PyTypeObject * cls) {
         PyObject* gc_module = PyImport_ImportModule("gc");
         if (!gc_module) {
@@ -257,7 +234,15 @@ namespace retracesoftware {
             for (Py_ssize_t i = 0; i < size; i++) {
                 PyObject* obj = PyList_GET_ITEM(all_objects, i);
                 
-                if (PyObject_TypeCheck(obj, cls)) {
+                // Skip null objects or objects with null type (shouldn't happen but be safe)
+                if (!obj || !Py_TYPE(obj)) {
+                    continue;
+                }
+                
+                // Only process objects that are direct instances of cls
+                // Using Py_TYPE(obj) == cls instead of PyObject_TypeCheck to be more precise
+                // and avoid issues with objects whose type chain might be inconsistent
+                if (Py_TYPE(obj) == cls) {
                     Py_hash_t old_hash = PyObject_Hash(obj);
                     if (old_hash != -1) {
                         hashes[obj] = old_hash;
@@ -270,8 +255,6 @@ namespace retracesoftware {
 
         Py_DECREF(all_objects);
     }
-
-#endif
 
     /**
      * Patch a Python type's hash function at the C level.
