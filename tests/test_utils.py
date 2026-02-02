@@ -197,6 +197,35 @@ def test_stack_functions_from_comprehension():
 
 
 # ============================================================================
+# GC iteration test - verify gc.get_objects() works in pytest
+# ============================================================================
+
+def test_gc_iteration_does_not_crash():
+    """Test that simply iterating gc.get_objects() doesn't crash pytest."""
+    import gc
+    import types
+    
+    all_objects = gc.get_objects()
+    assert len(all_objects) > 0
+    
+    # Count FunctionType objects (what patch_hash would do)
+    func_count = 0
+    for obj in all_objects:
+        if obj is None or type(obj) is None:
+            continue
+        if isinstance(obj, types.FunctionType):
+            func_count += 1
+            # Also try hashing them (what patch_hash does)
+            try:
+                h = hash(obj)
+            except TypeError:
+                pass  # Some objects aren't hashable
+    
+    assert func_count > 0, "Should find at least some functions"
+    print(f"Found {func_count} FunctionType objects out of {len(all_objects)} total")
+
+
+# ============================================================================
 # patch_hash tests
 # ============================================================================
 
