@@ -1,3 +1,27 @@
+/**
+ * patchhash.cpp - Runtime hash function patching for Python types
+ * 
+ * This module provides the ability to replace a Python type's __hash__ method
+ * at the C level (tp_hash slot) with a custom implementation. This is useful for:
+ * 
+ *   1. Making mutable objects hashable in a controlled way
+ *   2. Implementing deterministic/sequential hashing (e.g., for reproducible tests)
+ *   3. Customizing hash behavior without subclassing
+ * 
+ * Usage from Python:
+ *   patch_hash(MyClass, my_hash_func)
+ * 
+ * The hash function can return:
+ *   - int: Used directly as the hash value
+ *   - None: Falls back to identity hash (memory address)
+ *   - Counter object: Returns spread64(counter.next()) for sequential hashing
+ * 
+ * Implementation details:
+ *   - Hashes are cached per-object in a global map to ensure consistency
+ *   - The type's tp_dealloc is hooked to clean up cached hashes on object deletion
+ *   - Subclasses inherit the patched hash behavior via tp_base traversal
+ */
+
 #include "utils.h"
 #include "unordered_dense.h"
 
@@ -5,7 +29,10 @@ using namespace ankerl::unordered_dense;
 
 #include <stdint.h>
 
-/* Inverse of spread64 */
+/**
+ * Inverse of spread64 - recovers the original input from a spread64 output.
+ * Uses modular multiplicative inverses to reverse each transformation step.
+ */
 static inline uint64_t unspread64(uint64_t x) {
     // undo x ^= x >> 31
     x ^= x >> 31;
@@ -28,6 +55,15 @@ static inline uint64_t unspread64(uint64_t x) {
     return x;
 }
 
+/**
+ * Hash mixing function (splitmix64 finalizer).
+ * 
+ * Spreads sequential input values across the full 64-bit hash space to avoid
+ * clustering in hash tables. This is essential when using Counter-based hashing
+ * since consecutive integers would otherwise map to adjacent hash table buckets.
+ * 
+ * Based on the finalizer from SplitMix64 PRNG by Sebastiano Vigna.
+ */
 static inline uint64_t spread64(uint64_t x) {
     x ^= x >> 30;
     x *= 0xbf58476d1ce4e5b9ULL;
@@ -37,34 +73,21 @@ static inline uint64_t spread64(uint64_t x) {
     return x;
 }
 
-// static Py_hash_t patched_hash(PyObject * self) {
-//     auto it = hashes.find(self);
-
-//     printf("patched_hash count: %i\n", foo++);
-
-//     if (it == hashes.end()) {
-//         printf("new hash count: %i\n", foo1++);
-
-//         Py_hash_t hash = enabled ? spread64(counter++) : _Py_HashPointer(self);
-        
-//         hashes[self] = hash;
-
-//         return hash;
-//     } else {
-//         return it->second;
-//     }
-// }
-
 namespace retracesoftware {
 
+    /**
+     * Hasher - Stores the custom hash function and original deallocator for a patched type.
+     * 
+     * Each patched type gets a Hasher instance that:
+     *   - Wraps the user-provided Python hash function via FastCall for efficient invocation
+     *   - Preserves the original tp_dealloc so we can chain to it after cleanup
+     */
     struct Hasher {
-        FastCall hashfunc;
-        destructor dealloc;
+        FastCall hashfunc;   // User's hash function, wrapped for fast calling
+        destructor dealloc;  // Original tp_dealloc to chain to
     
-        // Copy Constructor
         Hasher(const Hasher& other) : hashfunc(other.hashfunc), dealloc(other.dealloc) {}
 
-        // Copy Assignment Operator
         Hasher& operator=(const Hasher& other) {
             if (this != &other) {
                 hashfunc = other.hashfunc;
@@ -76,27 +99,41 @@ namespace retracesoftware {
         Hasher(PyTypeObject * cls, PyObject * hasher) :
             hashfunc(FastCall(hasher)), dealloc(cls->tp_dealloc) {}
 
+        /**
+         * Compute hash for an object using the user's hash function.
+         * 
+         * The hash function can return:
+         *   - None: Use identity hash (_Py_HashPointer) - object's memory address
+         *   - int: Use the integer value directly as the hash
+         *   - Counter: Get next counter value and spread it across hash space
+         * 
+         * Note: Python requires hash() to never return -1 (reserved for errors),
+         * so we map -1 to 1.
+         */
         Py_hash_t hash(PyObject * self) {
             PyObject * result = hashfunc(self);
 
-            if (!result) return -1;
+            if (!result) return -1;  // Exception occurred
 
             if (result == Py_None) {
+                // None means "use identity hash"
                 Py_DECREF(result);
                 return _Py_HashPointer(self);
             }
 
             if (PyLong_CheckExact(result)) {
+                // Integer returned - use directly
                 Py_hash_t hash = PyLong_AsLongLong(result);
                 Py_DECREF(result);
-                if (hash == -1) hash = 1;
+                if (hash == -1) hash = 1;  // -1 reserved for errors
                 return hash;
             }
 
             if (Py_TYPE(result) == &Counter_Type) {
+                // Counter returned - get next value and spread for uniform distribution
                 Py_hash_t hash = (Py_hash_t)spread64(Counter_Next(result));
                 Py_DECREF(result);
-                if (hash == -1) hash = 1;
+                if (hash == -1) hash = 1;  // -1 reserved for errors
                 return hash;
             }
 
@@ -109,19 +146,36 @@ namespace retracesoftware {
         }  
     };
 
+    // Global hash cache: object pointer -> cached hash value
+    // Ensures hash(obj) always returns the same value for the lifetime of obj
     static map<PyObject *, Py_hash_t> hashes;
+    
+    // Registry of patched types: type -> Hasher containing hash func and original dealloc
     static map<PyTypeObject *, Hasher> hashers;
            
+    /**
+     * Find the Hasher for a type, traversing up the inheritance chain if needed.
+     * This allows subclasses to inherit patched hash behavior from their base class.
+     */
     static Hasher& find_hasher(PyTypeObject * cls) {
         auto it = hashers.find(cls);
         if (it != hashers.end()) return it->second;
-        else return find_hasher(cls->tp_base);
+        else return find_hasher(cls->tp_base);  // Recurse to base class
     }
 
+    /**
+     * The tp_hash implementation installed on patched types.
+     * 
+     * First checks the cache for a previously computed hash. If not found,
+     * computes a new hash using the user's hash function and caches it.
+     * Caching is essential for consistency - hash(obj) must always return
+     * the same value while obj is alive.
+     */
     static Py_hash_t hashfunc(PyObject * self) {
         auto it = hashes.find(self);
-        if (it != hashes.end()) return it->second;
+        if (it != hashes.end()) return it->second;  // Return cached hash
         else {
+            // Compute new hash and cache it
             Py_hash_t hash = find_hasher(Py_TYPE(self)).hash(self);
 
             if (hash != -1) {
@@ -131,17 +185,124 @@ namespace retracesoftware {
         }
     };
 
+    /**
+     * The tp_dealloc implementation installed on patched types.
+     * 
+     * Removes the object's cached hash (if any) before calling the original
+     * deallocator. This prevents memory leaks and stale cache entries.
+     */
     static void patched_dealloc(PyObject * self) {
-        hashes.erase(self);
-        find_hasher(Py_TYPE(self)).dealloc(self);
+        hashes.erase(self);                          // Clean up cached hash
+        find_hasher(Py_TYPE(self)).dealloc(self);    // Chain to original dealloc
     }
 
+    /**
+     * Pre-cache hashes for all existing instances of a type before patching.
+     * 
+     * This is critical for correctness: objects already stored in dicts/sets
+     * were placed there based on their original hash. If we change the hash
+     * function without caching old values, those objects become "lost" -
+     * lookups will search the wrong bucket and never find them.
+     * 
+     * Uses PyUnstable_GC_VisitObjects (Python 3.12+) to efficiently iterate
+     * all GC-tracked objects without building an intermediate list.
+     */
+
+#if PY_VERSION_HEX >= 0x030C0000  // Python 3.12+
+
+    // Callback for PyUnstable_GC_VisitObjects
+    static int cache_hash_visitor(PyObject* obj, void* arg) {
+        PyTypeObject* cls = (PyTypeObject*)arg;
+        
+        if (PyObject_TypeCheck(obj, cls)) {
+            Py_hash_t old_hash = PyObject_Hash(obj);
+            if (old_hash != -1) {
+                hashes[obj] = old_hash;
+            } else {
+                PyErr_Clear();  // Object wasn't hashable, skip it
+            }
+        }
+        return 0;  // Continue iteration
+    }
+
+    static void cache_existing_instance_hashes(PyTypeObject* cls) {
+        PyUnstable_GC_VisitObjects(cache_hash_visitor, (void*)cls);
+    }
+
+#else  // Python < 3.12: fall back to gc.get_objects()
+
+    static void cache_existing_instance_hashes(PyTypeObject * cls) {
+        PyObject* gc_module = PyImport_ImportModule("gc");
+        if (!gc_module) {
+            PyErr_Clear();
+            return;
+        }
+
+        PyObject* get_objects = PyObject_GetAttrString(gc_module, "get_objects");
+        Py_DECREF(gc_module);
+        if (!get_objects) {
+            PyErr_Clear();
+            return;
+        }
+
+        PyObject* all_objects = PyObject_CallNoArgs(get_objects);
+        Py_DECREF(get_objects);
+        if (!all_objects) {
+            PyErr_Clear();
+            return;
+        }
+
+        if (PyList_Check(all_objects)) {
+            Py_ssize_t size = PyList_GET_SIZE(all_objects);
+            for (Py_ssize_t i = 0; i < size; i++) {
+                PyObject* obj = PyList_GET_ITEM(all_objects, i);
+                
+                if (PyObject_TypeCheck(obj, cls)) {
+                    Py_hash_t old_hash = PyObject_Hash(obj);
+                    if (old_hash != -1) {
+                        hashes[obj] = old_hash;
+                    } else {
+                        PyErr_Clear();
+                    }
+                }
+            }
+        }
+
+        Py_DECREF(all_objects);
+    }
+
+#endif
+
+    /**
+     * Patch a Python type's hash function at the C level.
+     * 
+     * @param cls      The type to patch (e.g., a class object)
+     * @param hashfunc The new hash function to use. Should accept one argument
+     *                 (the object) and return int, None, or a Counter object.
+     * 
+     * After patching:
+     *   - cls.tp_hash points to our hashfunc() which calls the user's function
+     *   - cls.tp_dealloc points to patched_dealloc() which cleans up before
+     *     chaining to the original deallocator
+     *   - Subclasses of cls inherit the patched behavior
+     * 
+     * Safety: Before patching, we walk all existing instances via gc.get_objects()
+     * and cache their current hash values. This ensures objects already in
+     * dicts/sets remain findable - they keep their original hash.
+     * 
+     * Note: A type can only be patched once. Attempting to patch an already
+     * patched type will trigger an assertion failure.
+     */
     void patch_hash(PyTypeObject * cls, PyObject * hashfunc) {
 
-        assert (!hashers.contains(cls));
+        assert (!hashers.contains(cls));  // Can only patch once
 
-        Py_INCREF(cls);
-        Py_INCREF(hashfunc);
+        // CRITICAL: Cache existing instance hashes BEFORE patching
+        // Otherwise objects in sets/dicts become unfindable
+        cache_existing_instance_hashes(cls);
+
+        Py_INCREF(cls);       // Keep type alive
+        Py_INCREF(hashfunc);  // Keep hash function alive
 
         hashers.emplace(cls, Hasher(cls, hashfunc));
 
