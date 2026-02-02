@@ -153,15 +153,15 @@ namespace retracesoftware {
     // Registry of patched types: type -> Hasher containing hash func and original dealloc
     static map<PyTypeObject *, Hasher> hashers;
            
-    /**
-     * Find the Hasher for a type, traversing up the inheritance chain if needed.
-     * This allows subclasses to inherit patched hash behavior from their base class.
-     */
-    static Hasher& find_hasher(PyTypeObject * cls) {
-        auto it = hashers.find(cls);
-        if (it != hashers.end()) return it->second;
-        else return find_hasher(cls->tp_base);  // Recurse to base class
-    }
+        /**
+         * Find the Hasher for a type, traversing up the inheritance chain if needed.
+         * This allows subclasses to inherit patched hash behavior from their base class.
+         */
+        static Hasher& find_hasher(PyTypeObject * cls) {
+            auto it = hashers.find(cls);
+            if (it != hashers.end()) return it->second;
+            else return find_hasher(cls->tp_base);  // Recurse to base class
+        }
 
     /**
      * The tp_hash implementation installed on patched types.
@@ -190,10 +190,23 @@ namespace retracesoftware {
      * 
      * Removes the object's cached hash (if any) before calling the original
      * deallocator. This prevents memory leaks and stale cache entries.
+     *
+     * IMPORTANT: We must temporarily restore the original tp_dealloc while calling
+     * it because Python's subtype_dealloc reads type->tp_dealloc to find the base
+     * deallocator. If it sees our patched_dealloc instead of itself, it enters
+     * an infinite recursion loop.
      */
     static void patched_dealloc(PyObject * self) {
-        hashes.erase(self);                          // Clean up cached hash
-        find_hasher(Py_TYPE(self)).dealloc(self);    // Chain to original dealloc
+        hashes.erase(self);  // Clean up cached hash
+        
+        PyTypeObject* type = Py_TYPE(self);
+        Hasher& hasher = find_hasher(type);
+        
+        // Temporarily restore original tp_dealloc to prevent subtype_dealloc recursion
+        type->tp_dealloc = hasher.dealloc;
+        hasher.dealloc(self);  // Chain to original dealloc (object is freed here)
+        // Restore our patched dealloc for future objects
+        type->tp_dealloc = patched_dealloc;
     }
 
     /**

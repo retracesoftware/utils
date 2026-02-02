@@ -229,11 +229,10 @@ def test_gc_iteration_does_not_crash():
 # patch_hash tests
 # ============================================================================
 
-# Note: patch_hash tests crash when running under pytest due to gc.get_objects()
-# iterating over pytest's internal objects during the hash caching phase.
-# The functionality works correctly when tested directly (outside pytest).
-# These tests are skipped in pytest but can be run manually to verify behavior.
-_skip_patch_hash = True  # Skip in pytest; test manually with: python -c "..."
+# patch_hash tests now work correctly under pytest after fixing the subtype_dealloc
+# recursion bug. The fix temporarily restores the original tp_dealloc during
+# deallocation to prevent infinite recursion.
+_skip_patch_hash = False
 
 
 @pytest.mark.skipif(_skip_patch_hash, reason="patch_hash crashes under pytest due to gc.get_objects() interaction")
