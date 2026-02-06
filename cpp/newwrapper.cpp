@@ -74,6 +74,7 @@ namespace retracesoftware {
 
             if (nargs < 1) {
                 PyErr_Format(PyExc_TypeError, "__new__ takes at least one positional argument, the type");
+                fprintf(stderr, "SIGTRAP(NewWrapper): __new__ called with no args\n"); fflush(stderr);
                 raise(SIGTRAP);
                 return nullptr;
             }

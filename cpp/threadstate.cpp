@@ -519,22 +519,24 @@ namespace retracesoftware {
         void set_state_by_index(int i) {
             assert(i >= 0);
 
-            if (last_thread_state && last_thread_state != this) {
+            ThreadState* cached = last_thread_state;  // single TLS read
+            if (cached && cached != this) {
                 PyObject * dict = PyThreadState_GetDict();
 
                 PyObject * state = PyTuple_GET_ITEM(avaliable_states, last_per_thread_state);
-                PyDict_SetItem(dict, last_thread_state, state);
+                PyDict_SetItem(dict, cached, state);
                 last_thread_state = this;
             }
             last_per_thread_state = i;
         }
 
         int get_state_index() {
-            if (last_thread_state != this) {
+            ThreadState* cached = last_thread_state;  // single TLS read
+            if (cached != this) {
                 PyObject * dict = PyThreadState_GetDict();
 
                 PyObject * state = PyTuple_GET_ITEM(avaliable_states, last_per_thread_state);
-                PyDict_SetItem(dict, last_thread_state, state);
+                PyDict_SetItem(dict, cached, state);
                 
                 last_thread_state = this;
                 last_per_thread_state = index_of(PyDict_GetItem(dict, this));

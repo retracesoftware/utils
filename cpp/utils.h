@@ -74,6 +74,8 @@ namespace retracesoftware {
     extern PyTypeObject DictIntercept_Type;
     extern PyTypeObject CollectPred_Type;
     extern PyTypeObject RunAll_Type;
+    extern PyTypeObject StackFactory_Type;
+    extern PyTypeObject Stack_Type;
 
     void force_full_gc(void);
 
@@ -91,10 +93,46 @@ namespace retracesoftware {
 
     uint64_t Counter_Next(PyObject * counter);
 
-    using Frame = std::tuple<std::string, int, std::string, std::string, std::string>;
+    // Used by stack.cpp - struct for efficient stack tracking
+    struct CodeLocation {
+        PyObject * filename;
+        uint16_t lineno;
 
-    std::vector<Frame> stacktrMarker_Typeace();
-    PyObject * stacktrace_as_pyobject(void);
+        CodeLocation(PyObject * filename, uint16_t lineno) : filename(filename), lineno(lineno) {}
+
+        bool operator==(const CodeLocation& other) const {
+            return lineno == other.lineno && !PyUnicode_Compare(filename, other.filename);
+        }
+
+        PyObject * as_tuple() const {
+            return PyTuple_Pack(2, Py_NewRef(filename), PyLong_FromLong(lineno));
+        }
+
+        bool operator!=(const CodeLocation& other) const {
+            return !(*this == other);
+        }
+    };
+
+    struct Frame {
+        uint16_t instruction;
+        PyCodeObject * code_object;
+        
+        Frame(PyCodeObject * code_object, uint16_t instruction) : 
+            instruction(instruction), code_object(code_object) {
+            assert(code_object);
+        }
+
+        uint16_t lineno() const {
+            return PyCode_Addr2Line(code_object, instruction);
+        }
+
+        CodeLocation location() const {
+            return CodeLocation(code_object->co_filename, lineno());
+        }
+
+        auto operator<=>(const Frame&) const = default;
+    };
+
 
     PyObject * create_wrapped(PyTypeObject * cls, PyObject * target);
 

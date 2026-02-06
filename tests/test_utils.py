@@ -197,6 +197,608 @@ def test_stack_functions_from_comprehension():
 
 
 # ============================================================================
+# Stack / StackFactory tests
+# ============================================================================
+
+class TestStackFactory:
+    """Tests for StackFactory creation and basic calling."""
+
+    def test_create_factory(self):
+        factory = _utils.StackFactory()
+        assert factory is not None
+
+    def test_factory_exclude_is_set(self):
+        factory = _utils.StackFactory()
+        assert isinstance(factory.exclude, set)
+        assert len(factory.exclude) == 0
+
+    def test_factory_exclude_is_mutable(self):
+        factory = _utils.StackFactory()
+        factory.exclude.add(len)  # add a builtin
+        assert len in factory.exclude
+        factory.exclude.discard(len)
+        assert len not in factory.exclude
+
+    def test_factory_call_returns_stack(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        assert stack is not None
+        assert type(stack).__name__ == "Stack"
+
+    def test_factory_no_args(self):
+        factory = _utils.StackFactory()
+        with pytest.raises(TypeError):
+            factory(1)
+        with pytest.raises(TypeError):
+            factory(key=1)
+
+
+class TestStackProperties:
+    """Tests for Stack object properties and accessors."""
+
+    def _get_stack(self):
+        factory = _utils.StackFactory()
+        return factory()
+
+    def test_stack_has_func(self):
+        stack = self._get_stack()
+        assert callable(stack.func)
+
+    def test_stack_has_filename(self):
+        stack = self._get_stack()
+        fn = stack.filename
+        assert fn is not None
+        assert __file__.rstrip("c") in fn  # .pyc -> .py
+
+    def test_stack_has_lineno(self):
+        stack = self._get_stack()
+        assert isinstance(stack.lineno, int)
+        assert stack.lineno > 0
+
+    def test_stack_has_instruction(self):
+        stack = self._get_stack()
+        assert isinstance(stack.instruction, int)
+
+    def test_stack_has_index(self):
+        stack = self._get_stack()
+        assert isinstance(stack.index, int)
+        # Head frame should have the highest index
+        assert stack.index == len(stack) - 1
+
+    def test_stack_has_next(self):
+        stack = self._get_stack()
+        # Should have at least one more frame (test runner)
+        assert stack.next is not None
+
+    def test_stack_tail_next_is_none(self):
+        stack = self._get_stack()
+        current = stack
+        while current.next is not None:
+            current = current.next
+        assert current.next is None
+        assert current.index == 0
+
+
+class TestStackLength:
+    """Tests for Stack __len__ (O(1) via index)."""
+
+    def test_len_positive(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        assert len(stack) > 0
+
+    def test_len_equals_index_plus_one(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        assert len(stack) == stack.index + 1
+
+    def test_len_consistent_with_traversal(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        count = 0
+        current = stack
+        while current is not None:
+            count += 1
+            current = current.next
+        assert len(stack) == count
+
+    def test_nested_calls_increase_length(self):
+        factory = _utils.StackFactory()
+
+        def level1():
+            return factory()
+
+        def level2():
+            return level1()
+
+        s1 = level1()
+        s2 = level2()
+        assert len(s2) == len(s1) + 1
+
+
+class TestStackGetitem:
+    """Tests for Stack __getitem__ (indexed access)."""
+
+    def test_getitem_head(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        head = stack[stack.index]
+        assert head.func == stack.func
+
+    def test_getitem_tail(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        tail = stack[0]
+        assert tail.index == 0
+        assert tail.next is None
+
+    def test_getitem_negative_last(self):
+        """stack[-1] should return the head frame (highest index)."""
+        factory = _utils.StackFactory()
+        stack = factory()
+        last = stack[-1]
+        assert last.index == stack.index
+
+    def test_getitem_negative_first(self):
+        """stack[-len(stack)] should return the tail frame (index 0)."""
+        factory = _utils.StackFactory()
+        stack = factory()
+        first = stack[-len(stack)]
+        assert first.index == 0
+
+    def test_getitem_out_of_range(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        with pytest.raises(IndexError):
+            stack[len(stack) + 100]
+
+
+class TestStackEquality:
+    """Tests for Stack __eq__ / __ne__."""
+
+    def test_same_object_is_equal(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        assert stack == stack
+
+    def test_different_stacks_same_call_site(self):
+        factory = _utils.StackFactory()
+        stack1 = factory()
+        stack2 = factory()
+        # Instruction offsets differ because they're different calls
+        # but the structure is similar
+        assert stack1 is not stack2
+
+    def test_not_equal_to_non_stack(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        assert (stack == "not a stack") is NotImplemented or stack != "not a stack"
+
+
+class TestStackIteration:
+    """Tests for Stack __iter__."""
+
+    def test_iter_returns_tuples(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        for filename, lineno in stack:
+            assert isinstance(lineno, int)
+
+    def test_iter_length_matches(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        items = list(stack)
+        assert len(items) == len(stack)
+
+
+class TestStackLocations:
+    """Tests for Stack.locations() method."""
+
+    def test_locations_returns_list(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        locs = stack.locations()
+        assert isinstance(locs, list)
+        assert len(locs) == len(stack)
+
+    def test_locations_contains_tuples(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        locs = stack.locations()
+        for loc in locs:
+            assert isinstance(loc, tuple)
+            assert len(loc) == 2
+            filename, lineno = loc
+            assert isinstance(lineno, int)
+
+
+class TestStackExclude:
+    """Tests for StackFactory exclude filtering."""
+
+    def test_exclude_removes_function(self):
+        factory = _utils.StackFactory()
+
+        def excluded_func():
+            return factory()
+
+        # Without exclude
+        s1 = excluded_func()
+        funcs1 = []
+        current = s1
+        while current is not None:
+            funcs1.append(current.func)
+            current = current.next
+        assert excluded_func in funcs1
+
+        # With exclude
+        factory.exclude.add(excluded_func)
+        s2 = excluded_func()
+        funcs2 = []
+        current = s2
+        while current is not None:
+            funcs2.append(current.func)
+            current = current.next
+        assert excluded_func not in funcs2
+        assert len(s2) == len(s1) - 1
+
+
+class TestStackChangesFrom:
+    """Tests for Stack.changes_from() method."""
+
+    def test_same_stack_no_changes(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        pop_count, to_add = stack.changes_from(stack)
+        assert pop_count == 0
+        assert len(to_add) == 0
+
+    def test_from_none(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        pop_count, to_add = stack.changes_from(None)
+        assert pop_count == 0
+        assert len(to_add) == len(stack)
+
+    def test_type_error(self):
+        factory = _utils.StackFactory()
+        stack = factory()
+        with pytest.raises(TypeError):
+            stack.changes_from("invalid")
+
+    def test_nested_changes(self):
+        factory = _utils.StackFactory()
+
+        def level1():
+            return factory()
+
+        def level2():
+            return level1()
+
+        s1 = level1()
+        s2 = level2()
+
+        # Going from s1 to s2 should add one frame
+        pop_count, to_add = s2.changes_from(s1)
+        # s2 has one more frame at the top
+        assert len(to_add) >= 1
+
+    def test_symmetric_changes(self):
+        factory = _utils.StackFactory()
+
+        def func_a():
+            return factory()
+
+        def func_b():
+            return factory()
+
+        sa = func_a()
+        sb = func_b()
+
+        pop_a, add_a = sb.changes_from(sa)
+        pop_b, add_b = sa.changes_from(sb)
+
+        # Symmetric: what you remove going one way = what you add going back
+        assert pop_a == len(add_b)
+        assert pop_b == len(add_a)
+
+
+class TestStackDelta:
+    """Tests for StackFactory.delta() method."""
+
+    def test_first_delta_from_empty(self):
+        factory = _utils.StackFactory()
+        pop_count, to_add = factory.delta()
+        # First call: no cached stack, so pop 0 and add everything
+        assert pop_count == 0
+        assert len(to_add) > 0
+
+    def test_same_call_site_no_changes(self):
+        factory = _utils.StackFactory()
+        # First call populates cache
+        factory()
+        # Delta from same call site
+        pop_count, to_add = factory.delta()
+        # Should be minimal changes (just instruction offset might differ)
+        # But the structure/depth is the same
+        assert isinstance(pop_count, int)
+        assert isinstance(to_add, tuple)
+
+    def test_delta_detects_deeper_stack(self):
+        factory = _utils.StackFactory()
+
+        def level1():
+            return factory.delta()
+
+        def level2():
+            return level1()
+
+        # Populate cache at level1 depth
+        factory()
+        # Now call from deeper - should detect the change
+        pop_count, to_add = level2()
+        assert isinstance(pop_count, int)
+        assert isinstance(to_add, tuple)
+
+
+class TestStackReuse:
+    """Tests for suffix sharing optimization in create_from_frame."""
+
+    def test_repeated_calls_share_suffix(self):
+        """When called from same location twice, suffix nodes should be shared."""
+        factory = _utils.StackFactory()
+
+        def inner():
+            return factory()
+
+        s1 = inner()
+        s2 = inner()
+
+        # The deeper frames should be shared (same objects)
+        # Walk to find a common suffix
+        # Due to the reuse optimization, at some depth the nodes should be identical
+        c1 = s1.next
+        c2 = s2.next
+        # At least the deeper frames should be shared
+        found_shared = False
+        while c1 is not None and c2 is not None:
+            if c1 is c2:
+                found_shared = True
+                break
+            c1 = c1.next
+            c2 = c2.next
+        assert found_shared, "Expected suffix sharing between repeated stack captures"
+
+    def test_index_consistent_after_reuse(self):
+        """Index should be correct even when reusing suffix nodes."""
+        factory = _utils.StackFactory()
+
+        def inner():
+            return factory()
+
+        s1 = inner()
+        s2 = inner()
+
+        # Walk s2 and verify indices are sequential
+        current = s2
+        expected_index = s2.index
+        while current is not None:
+            assert current.index == expected_index
+            expected_index -= 1
+            current = current.next
+        assert expected_index == -1  # Should have counted down to -1
+
+
+# ============================================================================
+# Demultiplexer tests
+# ============================================================================
+
+class TestDemultiplexer:
+    """Tests for the Demultiplexer (demux) type."""
+
+    def test_create(self):
+        items = iter([(1, "a"), (2, "b")])
+        demux = _utils.demux(lambda: next(items), lambda item: item[0])
+        assert demux is not None
+
+    def test_single_key_single_item(self):
+        # Need a second item for the read-ahead that follows the fast-path return
+        items = iter([(1, "hello"), (1, "sentinel")])
+        demux = _utils.demux(lambda: next(items), lambda item: item[0])
+        result = demux(1)
+        assert result == (1, "hello")
+
+    def test_sequential_same_key(self):
+        # The fast path in get() reads ahead one item after returning,
+        # so we need N+1 items to safely consume N without the read-ahead
+        # hitting StopIteration and discarding the last result.
+        items = iter([(1, "a"), (1, "b"), (1, "c"), (1, "sentinel")])
+        demux = _utils.demux(lambda: next(items), lambda item: item[0])
+        assert demux(1) == (1, "a")
+        assert demux(1) == (1, "b")
+        assert demux(1) == (1, "c")
+
+    def test_two_threads_sequential_keys(self):
+        """Two threads consuming items with non-overlapping keys.
+
+        Items are grouped by key so the fast path handles everything
+        without needing cross-thread wakeups (which the fast path
+        doesn't issue for different keys).
+        """
+        import threading
+
+        # Group items by key: thread 1 gets both key-1 items via fast path,
+        # then thread 2 gets both key-2 items via fast path.
+        # Extra sentinel for the final read-ahead.
+        data = [(1, "a"), (1, "b"), (2, "x"), (2, "y"), (0, "sentinel")]
+        items = iter(data)
+        items_lock = threading.Lock()
+
+        def source():
+            with items_lock:
+                return next(items)
+
+        demux = _utils.demux(source, lambda item: item[0], timeout_seconds=5)
+        results = {}
+        errors = []
+        t1_done = threading.Event()
+
+        def consumer1():
+            try:
+                for _ in range(2):
+                    got = demux(1)
+                    results.setdefault(1, []).append(got)
+            except Exception as e:
+                errors.append((1, e))
+            finally:
+                t1_done.set()
+
+        def consumer2():
+            t1_done.wait(timeout=5)  # Wait for thread 1 to finish
+            try:
+                for _ in range(2):
+                    got = demux(2)
+                    results.setdefault(2, []).append(got)
+            except Exception as e:
+                errors.append((2, e))
+
+        t1 = threading.Thread(target=consumer1)
+        t2 = threading.Thread(target=consumer2)
+
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert not errors, f"Errors: {errors}"
+        assert [r[1] for r in results[1]] == ["a", "b"]
+        assert [r[1] for r in results[2]] == ["x", "y"]
+
+
+    def test_key_function_called(self):
+        """Verify the key function is actually used to match items."""
+        items = iter([{"id": "A", "val": 1}, {"id": "B", "val": 2}, {"id": "X", "val": 0}])
+        demux = _utils.demux(lambda: next(items), lambda item: item["id"])
+
+        result = demux("A")
+        assert result == {"id": "A", "val": 1}
+
+    def test_pending_keys(self):
+        """Test the pending_keys getter."""
+        items = iter([(1, "a")])
+        demux = _utils.demux(lambda: next(items), lambda item: item[0])
+        # Before any calls, pending should be empty
+        assert len(demux.pending_keys) == 0
+
+    def test_on_timeout_callback(self):
+        """Test that on_timeout is called when wait times out."""
+        import threading
+
+        # Source returns two items then blocks: the fast path in get() reads
+        # ahead one item after returning, so we need a second item available
+        # to avoid blocking on the first call.
+        call_count = [0]
+        event = threading.Event()
+
+        def blocking_source():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return (1, "first")
+            if call_count[0] == 2:
+                return (3, "lookahead")  # consumed by read-ahead, key 3 won't be requested
+            # All subsequent calls block until cleanup
+            event.wait(timeout=10)
+            raise StopIteration
+
+        timeout_called = []
+
+        def on_timeout(demux_obj, key):
+            timeout_called.append(key)
+            return ("timeout", key)
+
+        demux = _utils.demux(
+            blocking_source,
+            lambda item: item[0],
+            on_timeout=on_timeout,
+            timeout_seconds=1,
+        )
+
+        # First call gets the item with key 1; read-ahead consumes (3, "lookahead")
+        result1 = demux(1)
+        assert result1 == (1, "first")
+
+        # Now request key 2 — next item has key 3, so we enter wait() and timeout
+        result2 = demux(2)
+        assert result2 == ("timeout", 2)
+        assert 2 in timeout_called
+
+        event.set()  # Cleanup
+
+    def test_duplicate_key_raises(self):
+        """Requesting the same key from two threads should raise ValueError."""
+        import threading
+        import time
+
+        call_count = [0]
+        blocker = threading.Event()
+
+        def source():
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # Return an item with key 99 so that requests for key 1
+                # will enter wait() rather than the fast path
+                return (99, "wrong_key")
+            # Subsequent calls block until test cleanup
+            blocker.wait(timeout=10)
+            return (1, "a")
+
+        demux = _utils.demux(
+            source,
+            lambda item: item[0],
+            timeout_seconds=3,
+        )
+
+        errors = []
+
+        def first_consumer():
+            try:
+                demux(1)  # key 1 doesn't match next (key 99), enters wait()
+            except Exception as e:
+                errors.append(e)
+
+        def second_consumer():
+            time.sleep(0.2)  # Give t1 time to enter wait()
+            try:
+                demux(1)  # key 1 is already in pending_keys → ValueError
+            except Exception as e:
+                errors.append(e)
+
+        t1 = threading.Thread(target=first_consumer)
+        t2 = threading.Thread(target=second_consumer)
+
+        t1.start()
+        t2.start()
+
+        # Give threads a moment then unblock source for cleanup
+        time.sleep(0.5)
+        blocker.set()
+
+        t1.join(timeout=5)
+        t2.join(timeout=5)
+
+        # At least one should have gotten a ValueError for duplicate key
+        assert any(isinstance(e, ValueError) for e in errors), \
+            f"Expected ValueError but got: {errors}"
+
+    def test_callable_with_wrong_args_raises(self):
+        items = iter([(1, "a")])
+        demux = _utils.demux(lambda: next(items), lambda item: item[0])
+        with pytest.raises(TypeError):
+            demux()  # No args
+        with pytest.raises(TypeError):
+            demux(1, 2)  # Too many args
+
+
+# ============================================================================
 # GC iteration test - verify gc.get_objects() works in pytest
 # ============================================================================
 

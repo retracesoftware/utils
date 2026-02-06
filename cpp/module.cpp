@@ -132,10 +132,11 @@ static PyObject * sigtrap(PyObject * module, PyObject * obj) {
         PyErr_Print();
         PyErr_Clear();
     } else {
-        printf("%s\n", PyUnicode_AsUTF8(s));
+        fprintf(stderr, "SIGTRAP(utils.sigtrap): %s\n", PyUnicode_AsUTF8(s));
         Py_DECREF(s);
     }
-    // dump_stack_trace(PyThreadState_Get());
+    fflush(stdout);
+    fflush(stderr);
     raise(SIGTRAP);
     Py_RETURN_NONE;
 }
@@ -150,12 +151,6 @@ static PyObject * raise_exception(PyObject * module, PyObject * const * args, si
     // PyErr_Restore(args[0], args[1], nullptr);
     // PyErr_Restore(Py_NewRef(args[0]), Py_NewRef(args[1]), nullptr);
     return NULL;
-}
-
-#include "internal/pycore_frame.h"
-
-static PyObject * stack_trace_impl(PyObject * module, PyObject * unused) {
-    return retracesoftware::stacktrace_as_pyobject();
 }
 
 static PyObject* get_hashseed(PyObject* self, PyObject* args) {
@@ -559,7 +554,6 @@ static PyMethodDef module_methods[] = {
     {"unwrap", unwrap, METH_O, "TODO"},
     {"hashseed", get_hashseed, METH_NOARGS, "Get PYTHONHASHSEED internals"},
     {"sigtrap", (PyCFunction)sigtrap, METH_O, "TODO"},
-    {"stacktrace", (PyCFunction)stack_trace_impl, METH_NOARGS, "TODO"},
     {"type_flags", (PyCFunction)type_flags, METH_O, "return type flags as an int"},
     {"set_type_flags", (PyCFunction)set_type_flags, METH_VARARGS, "return type flags as an int"},
     {"noop", (PyCFunction)noop, METH_FASTCALL | METH_KEYWORDS, "TODO"},
@@ -688,6 +682,8 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::PerThread_Type,
         &retracesoftware::CollectPred_Type,
         &retracesoftware::RunAll_Type,
+        &retracesoftware::StackFactory_Type,
+        &retracesoftware::Stack_Type,
         NULL
     };
 

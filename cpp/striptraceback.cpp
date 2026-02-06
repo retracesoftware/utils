@@ -47,12 +47,15 @@ namespace retracesoftware {
                 if (exc_value && PyObject_TypeCheck(exc_value, (PyTypeObject *)PyExc_BaseException)) {
                     // Py_INCREF(Py_None);
                     if (PyObject_SetAttrString(exc_value, "__traceback__", Py_NewRef(Py_None)) < 0) {
+                        fprintf(stderr, "SIGTRAP(striptraceback): failed to set __traceback__\n"); fflush(stderr);
                         raise(SIGTRAP);
                     }
                     if (PyObject_SetAttrString(exc_value, "__context__", Py_NewRef(Py_None)) < 0) {
+                        fprintf(stderr, "SIGTRAP(striptraceback): failed to set __context__\n"); fflush(stderr);
                         raise(SIGTRAP);
                     }
                     if (PyObject_SetAttrString(exc_value, "__cause__", Py_NewRef(Py_None)) < 0) {
+                        fprintf(stderr, "SIGTRAP(striptraceback): failed to set __cause__\n"); fflush(stderr);
                         raise(SIGTRAP);
                     }
                     

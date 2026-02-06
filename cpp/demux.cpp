@@ -94,34 +94,31 @@ namespace retracesoftware {
         std::condition_variable wakeup;
         
         bool test_pending(PyObject * key) {
-            bool res = false;
+            PyGILGuard gil;
 
-            if (next) {
-                PyGILGuard gil;
+            if (!ensure_next()) {
+                throw std::exception();
+            }
 
-                PyObject * next_key = PyObject_CallOneArg(key_function, next);
-                
-                if (!next_key) {
-                    throw std::exception();
-                } else {
-                    if (key == next_key) {
-                        res = true;
-                    } else {
-                        
-                        switch (PyObject_RichCompareBool(next_key, key, Py_EQ)) {
-                            case 0: 
-                                res = false;
-                                break;
-                            case 1: res = true;
-                                break;
-                            default:
-                                Py_DECREF(next_key);
-                                throw std::exception();
-                        }
-                    }
-                    Py_DECREF(next_key);
+            PyObject * next_key = PyObject_CallOneArg(key_function, next);
+            
+            if (!next_key) {
+                throw std::exception();
+            }
+
+            bool res;
+            if (key == next_key) {
+                res = true;
+            } else {
+                switch (PyObject_RichCompareBool(next_key, key, Py_EQ)) {
+                    case 0: res = false; break;
+                    case 1: res = true; break;
+                    default:
+                        Py_DECREF(next_key);
+                        throw std::exception();
                 }
             }
+            Py_DECREF(next_key);
             return res;
         }
 
@@ -185,6 +182,10 @@ namespace retracesoftware {
             if (!next) {                
                 next = PyObject_CallNoArgs(source);
                 if (!next) return false;
+
+                if (!pending.empty()) {
+                    wakeup.notify_all();
+                }
             }
             return true;
         }
@@ -196,36 +197,14 @@ namespace retracesoftware {
 
             // fast path
             if (test_pending(key)) {
-                assert(next);
-
                 PyObject * res = next;
-                
-                next = PyObject_CallNoArgs(source);
-
-                if (!next) {
-                    Py_DECREF(res);
-                    return nullptr;
-                }
-                
-                if (test_pending(key)) {
-                    wakeup.notify_all();
-                } 
-                // next_key = PyObject_CallOneArg(key_function, next);
-                // // Py_DECREF(key);
-
-                // if (next_key != key && !pending.empty()) {
-                //     wakeup.notify_all();
-                // }
+                next = nullptr;
                 return res;
 
             } else if (PySet_Contains(pending_keys, key)) {
                 PyErr_Format(PyExc_ValueError, "Key %S already in set of pending gets", key);
                 return nullptr;
             } else {
-                if (!next && !ensure_next()) {
-                    return nullptr;
-                }
-
                 if (!wait(key)) {
                     
                     if (on_timeout) {
@@ -234,19 +213,9 @@ namespace retracesoftware {
                         PyErr_Format(PyExc_RuntimeError, "Error in demux waiting for: %S", key);
                         return nullptr;
                     }
-                    raise(SIGTRAP);
                 }
                 PyObject * res = next;
                 next = nullptr;
-
-                if (!ensure_next()) {
-                    Py_DECREF(res);
-                    return nullptr;
-                }
-
-                if (!pending.empty()) {
-                    wakeup.notify_all();
-                }
                 return res;
             }
         }

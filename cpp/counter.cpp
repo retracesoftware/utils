@@ -61,6 +61,7 @@ namespace retracesoftware {
             std::unique_lock lk(mtx);
 
             if (seq < counter) {
+                fprintf(stderr, "SIGTRAP(counter): seq=%llu < counter=%llu\n", (unsigned long long)seq, (unsigned long long)counter); fflush(stderr);
                 raise(SIGTRAP);
             }
 
