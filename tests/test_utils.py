@@ -970,3 +970,446 @@ def test_patch_hash_existing_instances_cached():
     assert h3 != original_hash_w1 and h3 != original_hash_w2, \
         "New object should have different hash from existing objects"
 
+
+# ============================================================================
+# ThreadState tests
+# ============================================================================
+
+class TestThreadState:
+    """Tests for ThreadState creation and basic operations."""
+
+    def test_creation(self):
+        state = _utils.ThreadState('disabled', 'internal', 'external', 'retrace')
+        assert state is not None
+
+    def test_default_value_is_first_state(self):
+        state = _utils.ThreadState('disabled', 'internal')
+        assert state.value == 'disabled'
+
+    def test_requires_at_least_two_states(self):
+        with pytest.raises(TypeError):
+            _utils.ThreadState('only_one')
+
+    def test_value_getter_setter(self):
+        state = _utils.ThreadState('disabled', 'internal')
+        assert state.value == 'disabled'
+        state.value = 'internal'
+        assert state.value == 'internal'
+        state.value = 'disabled'
+
+    def test_invalid_value_raises(self):
+        state = _utils.ThreadState('disabled', 'internal')
+        with pytest.raises(TypeError):
+            state.value = 'nonexistent'
+
+    def test_select_context_manager(self):
+        state = _utils.ThreadState('disabled', 'internal', 'external')
+        assert state.value == 'disabled'
+
+        with state.select('internal'):
+            assert state.value == 'internal'
+
+        assert state.value == 'disabled'
+
+    def test_select_nested(self):
+        state = _utils.ThreadState('disabled', 'internal', 'external')
+
+        with state.select('internal'):
+            assert state.value == 'internal'
+            with state.select('external'):
+                assert state.value == 'external'
+            assert state.value == 'internal'
+
+        assert state.value == 'disabled'
+
+    def test_predicate_matches_current_state(self):
+        state = _utils.ThreadState('disabled', 'internal', 'external')
+
+        is_disabled = state.predicate('disabled')
+        is_internal = state.predicate('internal')
+
+        assert is_disabled()
+        assert not is_internal()
+
+        state.value = 'internal'
+        assert not is_disabled()
+        assert is_internal()
+
+        state.value = 'disabled'
+
+    def test_repr_contains_state(self):
+        state = _utils.ThreadState('disabled', 'internal')
+        r = repr(state)
+        assert 'ThreadState' in r
+        assert 'disabled' in r
+
+    def test_wrap_function(self):
+        """wrap() creates a callable that switches state before calling."""
+        state = _utils.ThreadState('disabled', 'internal', 'external')
+
+        def check_state():
+            return state.value
+
+        wrapped = state.wrap('internal', check_state)
+        assert state.value == 'disabled'
+        assert wrapped() == 'internal'
+        assert state.value == 'disabled'  # restored after call
+
+
+# ============================================================================
+# Dispatch tests
+# ============================================================================
+
+class TestDispatch:
+    """Tests for Dispatch creation and routing."""
+
+    def test_creation_with_all_states(self):
+        state = _utils.ThreadState('a', 'b')
+        d = state.dispatch(a=lambda: 'a', b=lambda: 'b')
+        assert d is not None
+
+    def test_creation_with_default(self):
+        state = _utils.ThreadState('a', 'b', 'c')
+        d = state.dispatch(lambda: 'default', b=lambda: 'b')
+        assert d is not None
+
+    def test_missing_state_and_no_default_raises(self):
+        state = _utils.ThreadState('a', 'b', 'c')
+        with pytest.raises(TypeError):
+            state.dispatch(a=lambda: 'a', b=lambda: 'b')
+            # 'c' is not specified and no default given
+
+    def test_routes_to_current_state(self):
+        state = _utils.ThreadState('disabled', 'internal')
+
+        d = state.dispatch(
+            disabled=lambda: 'from_disabled',
+            internal=lambda: 'from_internal',
+        )
+
+        assert d() == 'from_disabled'
+
+        state.value = 'internal'
+        assert d() == 'from_internal'
+        state.value = 'disabled'
+
+    def test_routes_with_args(self):
+        state = _utils.ThreadState('disabled', 'internal')
+
+        d = state.dispatch(
+            disabled=lambda x, y: x + y,
+            internal=lambda x, y: x * y,
+        )
+
+        assert d(3, 4) == 7
+
+        state.value = 'internal'
+        assert d(3, 4) == 12
+        state.value = 'disabled'
+
+    def test_routes_with_kwargs(self):
+        state = _utils.ThreadState('disabled', 'internal')
+
+        d = state.dispatch(
+            disabled=lambda x, y=10: x + y,
+            internal=lambda x, y=10: x * y,
+        )
+
+        assert d(3) == 13
+        assert d(3, y=5) == 8
+
+        state.value = 'internal'
+        assert d(3) == 30
+        assert d(3, y=5) == 15
+        state.value = 'disabled'
+
+    def test_default_fills_unspecified_states(self):
+        state = _utils.ThreadState('disabled', 'internal', 'external')
+
+        def default_handler(*args):
+            return 'default'
+
+        def internal_handler(*args):
+            return 'internal'
+
+        d = state.dispatch(default_handler, internal=internal_handler)
+
+        # disabled → default
+        assert d() == 'default'
+
+        # internal → override
+        state.value = 'internal'
+        assert d() == 'internal'
+
+        # external → default
+        state.value = 'external'
+        assert d() == 'default'
+
+        state.value = 'disabled'
+
+    def test_table_returns_dict_of_handlers(self):
+        state = _utils.ThreadState('disabled', 'internal')
+
+        handler_d = lambda: 'disabled'
+        handler_i = lambda: 'internal'
+
+        d = state.dispatch(disabled=handler_d, internal=handler_i)
+
+        table = _utils.dispatch.table(d)
+        assert isinstance(table, dict)
+        assert 'disabled' in table
+        assert 'internal' in table
+
+    def test_table_maps_original_handlers(self):
+        state = _utils.ThreadState('disabled', 'internal')
+
+        handler_d = lambda: 'disabled'
+        handler_i = lambda: 'internal'
+
+        d = state.dispatch(disabled=handler_d, internal=handler_i)
+
+        table = _utils.dispatch.table(d)
+        assert table['disabled'] is handler_d
+        assert table['internal'] is handler_i
+
+    def test_table_default_appears_for_unspecified(self):
+        state = _utils.ThreadState('disabled', 'internal', 'external')
+
+        original = lambda: 'original'
+        override = lambda: 'override'
+
+        d = state.dispatch(original, internal=override)
+
+        table = _utils.dispatch.table(d)
+        assert table['disabled'] is original
+        assert table['internal'] is override
+        assert table['external'] is original
+
+    def test_table_type_error_for_non_dispatch(self):
+        with pytest.raises(TypeError):
+            _utils.dispatch.table("not a dispatch")
+
+    def test_routes_change_with_select(self):
+        """Dispatch routing follows select() context manager."""
+        state = _utils.ThreadState('disabled', 'internal', 'external')
+
+        d = state.dispatch(
+            disabled=lambda: 'disabled',
+            internal=lambda: 'internal',
+            external=lambda: 'external',
+        )
+
+        assert d() == 'disabled'
+
+        with state.select('internal'):
+            assert d() == 'internal'
+            with state.select('external'):
+                assert d() == 'external'
+            assert d() == 'internal'
+
+        assert d() == 'disabled'
+
+    def test_set_dispatch_updates_handler(self):
+        state = _utils.ThreadState('disabled', 'internal')
+
+        d = state.dispatch(
+            disabled=lambda: 'old_disabled',
+            internal=lambda: 'old_internal',
+        )
+
+        assert d() == 'old_disabled'
+
+        state.set_dispatch(d, disabled=lambda: 'new_disabled')
+        assert d() == 'new_disabled'
+
+        # untouched state still returns old handler
+        state.value = 'internal'
+        assert d() == 'old_internal'
+        state.value = 'disabled'
+
+    def test_method_dispatch_creation_and_table(self):
+        state = _utils.ThreadState('disabled', 'internal')
+
+        handler_d = lambda self: 'disabled'
+        handler_i = lambda self: 'internal'
+
+        d = state.method_dispatch(disabled=handler_d, internal=handler_i)
+
+        # method_dispatch is a subtype of dispatch, so table() works
+        table = _utils.dispatch.table(d)
+        assert table['disabled'] is handler_d
+        assert table['internal'] is handler_i
+
+    def test_method_dispatch_isinstance_dispatch(self):
+        """MethodDispatch is a subtype of Dispatch."""
+        state = _utils.ThreadState('disabled', 'internal')
+        d = state.method_dispatch(
+            disabled=lambda self: 'd',
+            internal=lambda self: 'i',
+        )
+        assert isinstance(d, _utils.dispatch)
+
+    def test_dispatch_repr(self):
+        state = _utils.ThreadState('disabled', 'internal')
+
+        d = state.dispatch(
+            disabled=lambda: 'disabled',
+            internal=lambda: 'internal',
+        )
+
+        r = repr(d)
+        assert 'Dispatch' in r
+
+
+# ============================================================================
+# Wrapped / unwrap tests
+# ============================================================================
+
+class TestWrappedUnwrap:
+    """Tests for wrapped_function, wrapped_member, try_unwrap, and unwrap."""
+
+    def test_wrapped_function_creation(self):
+        def original(x):
+            return x + 1
+
+        def handler(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        wf = _utils.wrapped_function(target=original, handler=handler)
+        assert wf is not None
+
+    def test_wrapped_function_calls_via_handler(self):
+        calls = []
+
+        def original(x):
+            return x + 1
+
+        def handler(target, *args, **kwargs):
+            calls.append(('handler', target, args))
+            return target(*args, **kwargs)
+
+        wf = _utils.wrapped_function(target=original, handler=handler)
+        result = wf(5)
+        assert result == 6
+        assert len(calls) == 1
+        assert calls[0][1] is original
+        assert calls[0][2] == (5,)
+
+    def test_try_unwrap_wrapped_function(self):
+        def original(x):
+            return x + 1
+
+        def handler(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        wf = _utils.wrapped_function(target=original, handler=handler)
+        unwrapped = _utils.try_unwrap(wf)
+        assert unwrapped is original
+
+    def test_try_unwrap_returns_same_for_non_wrapped(self):
+        obj = "hello"
+        assert _utils.try_unwrap(obj) is obj
+
+        num = 42
+        assert _utils.try_unwrap(num) is num
+
+    def test_unwrap_wrapped_function(self):
+        def original(x):
+            return x + 1
+
+        def handler(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        wf = _utils.wrapped_function(target=original, handler=handler)
+        unwrapped = _utils.unwrap(wf)
+        assert unwrapped is original
+
+    def test_unwrap_raises_for_non_wrapped(self):
+        with pytest.raises(TypeError):
+            _utils.unwrap("not wrapped")
+
+    def test_wrapped_member_creation(self):
+        # Use a real descriptor: type.__name__ is a GetSetDescriptor
+        member = type.__dict__['__name__']
+
+        def handler(*args):
+            return args
+
+        wm = _utils.wrapped_member(target=member, handler=handler)
+        assert wm is not None
+
+    def test_try_unwrap_wrapped_member(self):
+        member = type.__dict__['__name__']
+
+        def handler(*args):
+            return args
+
+        wm = _utils.wrapped_member(target=member, handler=handler)
+        unwrapped = _utils.try_unwrap(wm)
+        assert unwrapped is member
+
+    def test_is_wrapped_positive(self):
+        def original(x):
+            return x + 1
+
+        def handler(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        wf = _utils.wrapped_function(target=original, handler=handler)
+        assert _utils.is_wrapped(wf)
+
+        member = type.__dict__['__name__']
+        wm = _utils.wrapped_member(target=member, handler=handler)
+        assert _utils.is_wrapped(wm)
+
+    def test_is_wrapped_negative(self):
+        assert not _utils.is_wrapped("hello")
+        assert not _utils.is_wrapped(42)
+        assert not _utils.is_wrapped(lambda: None)
+
+    def test_unwrap_apply_calls_original_target(self):
+        """unwrap_apply(wrapped, *args) calls the original target directly."""
+        calls = []
+
+        def original(x, y):
+            calls.append(('original', x, y))
+            return x + y
+
+        def handler(target, *args, **kwargs):
+            calls.append(('handler',))
+            return target(*args, **kwargs)
+
+        wf = _utils.wrapped_function(target=original, handler=handler)
+
+        # unwrap_apply bypasses the handler and calls the target directly
+        result = _utils.unwrap_apply(wf, 3, 4)
+        assert result == 7
+        assert calls == [('original', 3, 4)]  # handler was NOT called
+
+    def test_dispatch_table_extracts_original_from_proxy_pattern(self):
+        """Simulate the proxy pattern: dispatch(original, internal=wrapped).
+
+        The 'disabled' entry in the table should be the original function.
+        """
+        state = _utils.ThreadState('disabled', 'internal', 'external', 'retrace')
+
+        def original_func():
+            return 'original'
+
+        def handler(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        wrapped = _utils.wrapped_function(target=original_func, handler=handler)
+        d = state.dispatch(original_func, internal=wrapped)
+
+        # The dispatch table's 'disabled' entry is the original
+        table = _utils.dispatch.table(d)
+        assert table['disabled'] is original_func
+
+        # And the 'internal' entry is the wrapped version
+        assert table['internal'] is wrapped
+
+        # We can chain: get original from dispatch, then verify it's the real deal
+        extracted = table['disabled']
+        assert extracted() == 'original'
+
