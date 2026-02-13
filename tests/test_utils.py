@@ -1413,3 +1413,893 @@ class TestWrappedUnwrap:
         extracted = table['disabled']
         assert extracted() == 'original'
 
+
+# ============================================================================
+# Gate tests
+# ============================================================================
+
+class TestGateCreation:
+    """Tests for Gate creation and basic state."""
+
+    def test_create(self):
+        gate = _utils.Gate()
+        assert gate is not None
+
+    def test_initial_executor_is_none(self):
+        gate = _utils.Gate()
+        assert gate.executor is None
+
+    def test_repr_disabled(self):
+        gate = _utils.Gate()
+        r = repr(gate)
+        assert 'Gate' in r
+        assert 'disabled' in r.lower()
+
+    def test_no_args(self):
+        with pytest.raises(TypeError):
+            _utils.Gate(1)
+        with pytest.raises(TypeError):
+            _utils.Gate(x=1)
+
+    def test_default_executor(self):
+        """Gate(default=callable) uses that executor when no thread-local is set."""
+        gate = _utils.Gate(default=_utils.noop)
+        assert gate.executor is _utils.noop
+        bound = gate.bind(lambda: 42)
+        assert bound() is None  # noop ignores target and returns None
+
+    def test_default_pass_through(self):
+        """Gate(default=pass_through) forwards to target when no thread-local set."""
+        pass_through = lambda target, *args, **kwargs: target(*args, **kwargs)
+        gate = _utils.Gate(default=pass_through)
+        assert gate.executor is pass_through
+        bound = gate.bind(lambda x: x + 1)
+        assert bound(10) == 11
+
+    def test_disable_restores_to_default(self):
+        """Disabling a gate with default restores to the default executor."""
+        pass_through = lambda target, *args, **kwargs: target(*args, **kwargs)
+        override = lambda target, *args, **kwargs: 999
+        gate = _utils.Gate(default=pass_through)
+        gate.set(override)
+        assert gate.executor is override
+        gate.disable()
+        assert gate.executor is pass_through
+        bound = gate.bind(lambda x: x + 1)
+        assert bound(10) == 11
+
+    def test_default_none_same_as_no_default(self):
+        gate = _utils.Gate(default=None)
+        assert gate.executor is None
+
+    def test_default_non_callable_raises(self):
+        with pytest.raises(TypeError):
+            _utils.Gate(default=42)
+
+
+class TestGateSetDisable:
+    """Tests for Gate.set() and Gate.disable()."""
+
+    def test_set_executor(self):
+        gate = _utils.Gate()
+        executor = lambda target, *args, **kwargs: target(*args, **kwargs)
+        gate.set(executor)
+        assert gate.executor is executor
+
+    def test_set_none_disables(self):
+        gate = _utils.Gate()
+        executor = lambda target, *args, **kwargs: target(*args, **kwargs)
+        gate.set(executor)
+        assert gate.executor is executor
+        gate.set(None)
+        assert gate.executor is None
+
+    def test_disable(self):
+        gate = _utils.Gate()
+        executor = lambda target, *args, **kwargs: target(*args, **kwargs)
+        gate.set(executor)
+        gate.disable()
+        assert gate.executor is None
+
+    def test_is_set(self):
+        gate = _utils.Gate()
+        assert gate.is_set() is False
+        gate.set(lambda t, *a, **k: t(*a, **k))
+        assert gate.is_set() is True
+        gate.disable()
+        assert gate.is_set() is False
+
+    def test_is_set_with_default(self):
+        gate = _utils.Gate(default=_utils.noop)
+        assert gate.is_set() is True  # default counts as set
+        gate.disable()  # restore to default
+        assert gate.is_set() is True
+
+    def test_set_non_callable_raises(self):
+        gate = _utils.Gate()
+        with pytest.raises(TypeError):
+            gate.set(42)
+        with pytest.raises(TypeError):
+            gate.set("not callable")
+
+    def test_repr_with_executor(self):
+        gate = _utils.Gate()
+        gate.set(lambda target, *a, **kw: target(*a, **kw))
+        r = repr(gate)
+        assert 'Gate' in r
+        assert 'lambda' in r
+
+
+class TestGateBind:
+    """Tests for Gate.bind() — creating BoundGate wrappers."""
+
+    def test_bind_returns_callable(self):
+        gate = _utils.Gate()
+        target = lambda x: x + 1
+        bound = gate.bind(target)
+        assert callable(bound)
+
+    def test_bind_non_callable_raises(self):
+        gate = _utils.Gate()
+        with pytest.raises(TypeError):
+            gate.bind(42)
+
+    def test_bound_disabled_calls_target_directly(self):
+        """When gate is disabled (no executor), bound calls target directly."""
+        gate = _utils.Gate()  # disabled by default
+        calls = []
+
+        def target(x, y):
+            calls.append(('target', x, y))
+            return x + y
+
+        bound = gate.bind(target)
+        result = bound(3, 4)
+
+        assert result == 7
+        assert calls == [('target', 3, 4)]
+
+    def test_bound_with_executor_routes_through_executor(self):
+        """When gate has an executor, bound calls go through it."""
+        gate = _utils.Gate()
+        calls = []
+
+        def my_executor(target, *args, **kwargs):
+            calls.append(('executor', target.__name__, args, kwargs))
+            return target(*args, **kwargs)
+
+        def target(x, y):
+            calls.append(('target', x, y))
+            return x + y
+
+        gate.set(my_executor)
+        bound = gate.bind(target)
+        result = bound(3, 4)
+
+        assert result == 7
+        assert len(calls) == 2
+        assert calls[0] == ('executor', 'target', (3, 4), {})
+        assert calls[1] == ('target', 3, 4)
+
+    def test_bound_with_kwargs(self):
+        gate = _utils.Gate()
+
+        def target(x, y=10):
+            return x + y
+
+        bound = gate.bind(target)
+
+        # Disabled — direct call
+        assert bound(3) == 13
+        assert bound(3, y=5) == 8
+
+        # With executor
+        def passthrough(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        gate.set(passthrough)
+        assert bound(3) == 13
+        assert bound(3, y=5) == 8
+
+    def test_bound_repr(self):
+        gate = _utils.Gate()
+        target = lambda x: x
+        bound = gate.bind(target)
+        r = repr(bound)
+        assert 'BoundGate' in r
+
+    def test_multiple_binds_share_gate(self):
+        """Multiple binds to the same gate share the same executor."""
+        gate = _utils.Gate()
+        calls = []
+
+        def executor(target, *args, **kwargs):
+            calls.append(target.__name__)
+            return target(*args, **kwargs)
+
+        def func_a():
+            return 'a'
+
+        def func_b():
+            return 'b'
+
+        bound_a = gate.bind(func_a)
+        bound_b = gate.bind(func_b)
+
+        # Disabled — direct
+        assert bound_a() == 'a'
+        assert bound_b() == 'b'
+        assert calls == []
+
+        # Enable executor
+        gate.set(executor)
+        assert bound_a() == 'a'
+        assert bound_b() == 'b'
+        assert calls == ['func_a', 'func_b']
+
+
+class TestGateContextManager:
+    """Tests for gate(executor) context manager."""
+
+    def test_context_sets_and_restores(self):
+        gate = _utils.Gate()
+        executor = lambda target, *a, **kw: target(*a, **kw)
+
+        assert gate.executor is None
+
+        with gate(executor):
+            assert gate.executor is executor
+
+        assert gate.executor is None
+
+    def test_context_restores_previous(self):
+        gate = _utils.Gate()
+        exec1 = lambda target, *a, **kw: target(*a, **kw)
+        exec2 = lambda target, *a, **kw: target(*a, **kw)
+
+        gate.set(exec1)
+
+        with gate(exec2):
+            assert gate.executor is exec2
+
+        assert gate.executor is exec1
+
+    def test_context_nested(self):
+        gate = _utils.Gate()
+        exec1 = lambda target, *a, **kw: 'exec1'
+        exec2 = lambda target, *a, **kw: 'exec2'
+        exec3 = lambda target, *a, **kw: 'exec3'
+
+        def target():
+            return 'direct'
+
+        bound = gate.bind(target)
+
+        assert bound() == 'direct'
+
+        with gate(exec1):
+            assert bound() == 'exec1'
+            with gate(exec2):
+                assert bound() == 'exec2'
+                with gate(exec3):
+                    assert bound() == 'exec3'
+                assert bound() == 'exec2'
+            assert bound() == 'exec1'
+
+        assert bound() == 'direct'
+
+    def test_context_with_none_disables(self):
+        gate = _utils.Gate()
+        executor = lambda target, *a, **kw: 'intercepted'
+        target = lambda: 'direct'
+
+        gate.set(executor)
+        bound = gate.bind(target)
+
+        assert bound() == 'intercepted'
+
+        with gate(None):
+            assert bound() == 'direct'
+
+        assert bound() == 'intercepted'
+
+    def test_context_restores_on_exception(self):
+        gate = _utils.Gate()
+        executor = lambda target, *a, **kw: target(*a, **kw)
+
+        gate.set(executor)
+        other_exec = lambda target, *a, **kw: target(*a, **kw)
+
+        try:
+            with gate(other_exec):
+                assert gate.executor is other_exec
+                raise ValueError("boom")
+        except ValueError:
+            pass
+
+        assert gate.executor is executor
+
+    def test_context_non_callable_raises(self):
+        gate = _utils.Gate()
+        with pytest.raises(TypeError):
+            gate(42)
+
+
+class TestGateThreadIsolation:
+    """Tests that Gate executor is per-thread."""
+
+    def test_different_threads_see_different_executors(self):
+        import threading
+
+        gate = _utils.Gate()
+        results = {}
+
+        def exec_record(target, *args, **kwargs):
+            return ('recorded', target(*args, **kwargs))
+
+        def exec_replay(target, *args, **kwargs):
+            return ('replayed', target(*args, **kwargs))
+
+        def target():
+            return 'result'
+
+        bound = gate.bind(target)
+
+        def thread_record():
+            gate.set(exec_record)
+            results['record'] = bound()
+
+        def thread_replay():
+            gate.set(exec_replay)
+            results['replay'] = bound()
+
+        t1 = threading.Thread(target=thread_record)
+        t2 = threading.Thread(target=thread_replay)
+        t1.start()
+        t1.join()
+        t2.start()
+        t2.join()
+
+        assert results['record'] == ('recorded', 'result')
+        assert results['replay'] == ('replayed', 'result')
+
+        # Main thread should still be disabled
+        assert bound() == 'result'
+
+    def test_context_manager_thread_isolated(self):
+        import threading
+
+        gate = _utils.Gate()
+        results = {}
+        barrier = threading.Barrier(2)
+
+        def target():
+            return 'value'
+
+        bound = gate.bind(target)
+
+        def exec_a(target, *a, **kw):
+            return 'A:' + target(*a, **kw)
+
+        def exec_b(target, *a, **kw):
+            return 'B:' + target(*a, **kw)
+
+        def thread_a():
+            with gate(exec_a):
+                barrier.wait(timeout=5)  # sync
+                results['a'] = bound()
+                barrier.wait(timeout=5)  # sync
+
+        def thread_b():
+            with gate(exec_b):
+                barrier.wait(timeout=5)  # sync
+                results['b'] = bound()
+                barrier.wait(timeout=5)  # sync
+
+        t1 = threading.Thread(target=thread_a)
+        t2 = threading.Thread(target=thread_b)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert results['a'] == 'A:value'
+        assert results['b'] == 'B:value'
+
+
+class TestGateExecutorBehavior:
+    """Tests for various executor patterns."""
+
+    def test_executor_receives_target_and_args(self):
+        gate = _utils.Gate()
+        received = []
+
+        def executor(target, *args, **kwargs):
+            received.append((target, args, tuple(sorted(kwargs.items()))))
+            return target(*args, **kwargs)
+
+        def target(a, b, c=None):
+            return (a, b, c)
+
+        gate.set(executor)
+        bound = gate.bind(target)
+        result = bound(1, 2, c=3)
+
+        assert result == (1, 2, 3)
+        assert len(received) == 1
+        assert received[0][0] is target
+        assert received[0][1] == (1, 2)
+        assert received[0][2] == (('c', 3),)
+
+    def test_executor_can_short_circuit(self):
+        """Executor can return without calling target."""
+        gate = _utils.Gate()
+
+        def replay_executor(target, *args, **kwargs):
+            return 'replayed_value'
+
+        def target():
+            raise RuntimeError("should not be called")
+
+        gate.set(replay_executor)
+        bound = gate.bind(target)
+        result = bound()
+        assert result == 'replayed_value'
+
+    def test_executor_can_modify_args(self):
+        gate = _utils.Gate()
+
+        def doubling_executor(target, *args, **kwargs):
+            new_args = tuple(a * 2 for a in args)
+            return target(*new_args, **kwargs)
+
+        def target(x, y):
+            return x + y
+
+        gate.set(doubling_executor)
+        bound = gate.bind(target)
+        assert bound(3, 4) == 14  # (6 + 8)
+
+    def test_switching_executors_at_runtime(self):
+        gate = _utils.Gate()
+
+        def exec_record(target, *args, **kwargs):
+            return ('record', target(*args, **kwargs))
+
+        def exec_replay(target, *args, **kwargs):
+            return ('replay', target(*args, **kwargs))
+
+        def target():
+            return 'data'
+
+        bound = gate.bind(target)
+
+        assert bound() == 'data'
+
+        gate.set(exec_record)
+        assert bound() == ('record', 'data')
+
+        gate.set(exec_replay)
+        assert bound() == ('replay', 'data')
+
+        gate.disable()
+        assert bound() == 'data'
+
+
+class TestApplyWith:
+    """Tests for gate.apply_with() — temporary executor activation."""
+
+    def test_apply_with_returns_callable(self):
+        gate = _utils.Gate()
+        def executor(target, *args, **kwargs):
+            return target(*args, **kwargs)
+        aw = gate.apply_with(executor)
+        assert callable(aw)
+
+    def test_apply_with_calls_function_directly(self):
+        """apply_with(f, *args) calls f(*args) directly — the executor is
+        activated on the gate, not used to route the call itself."""
+        gate = _utils.Gate()
+
+        def executor(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        aw = gate.apply_with(executor)
+        result = aw(lambda x, y: x + y, 3, 4)
+        assert result == 7
+
+    def test_apply_with_no_executor_active_before_and_after(self):
+        """apply_with only activates the executor during the call."""
+        gate = _utils.Gate()
+
+        def executor(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        aw = gate.apply_with(executor)
+
+        # Gate starts disabled
+        assert gate.executor is None
+
+        aw(lambda: 42)
+
+        # Gate is disabled again after the call
+        assert gate.executor is None
+
+    def test_apply_with_restores_previous_executor(self):
+        """If a different executor was already set, it is restored."""
+        gate = _utils.Gate()
+
+        def original_exec(target, *args, **kwargs):
+            return ('original', target(*args, **kwargs))
+
+        def temp_exec(target, *args, **kwargs):
+            return ('temp', target(*args, **kwargs))
+
+        gate.set(original_exec)
+        aw = gate.apply_with(temp_exec)
+        bound = gate.bind(lambda: 'data')
+
+        # During aw(), BoundGate calls go through temp_exec
+        result = aw(lambda: bound())
+        assert result == ('temp', 'data')
+
+        # Original executor is restored
+        assert gate.executor is original_exec
+
+    def test_apply_with_restores_on_exception(self):
+        """Previous executor is restored even if the call raises."""
+        gate = _utils.Gate()
+
+        def original_exec(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        def temp_exec(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        gate.set(original_exec)
+        aw = gate.apply_with(temp_exec)
+
+        def boom():
+            raise ValueError("kaboom")
+
+        with pytest.raises(ValueError, match="kaboom"):
+            aw(boom)
+
+        # Original executor is restored despite the exception
+        assert gate.executor is original_exec
+
+    def test_apply_with_kwargs(self):
+        """Keyword arguments are forwarded correctly."""
+        gate = _utils.Gate()
+
+        def executor(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        aw = gate.apply_with(executor)
+
+        def f(a, b, c=None):
+            return (a, b, c)
+
+        assert aw(f, 1, 2, c=3) == (1, 2, 3)
+
+    def test_apply_with_none_disables(self):
+        """apply_with(None) temporarily disables the executor."""
+        gate = _utils.Gate()
+        calls = []
+
+        def active_exec(target, *args, **kwargs):
+            calls.append('exec')
+            return target(*args, **kwargs)
+
+        gate.set(active_exec)
+        aw = gate.apply_with(None)
+
+        # apply_with(None) should disable, so bind'd functions go direct
+        bound = gate.bind(lambda: 'hello')
+
+        # But apply_with(None) works on direct calls, not bound calls.
+        # It just calls f(*args, **kwargs) with the gate disabled.
+        result = aw(lambda: 'direct')
+        assert result == 'direct'
+        assert calls == []  # executor was not called
+
+        # Active executor is restored
+        assert gate.executor is active_exec
+
+    def test_apply_with_no_args_raises(self):
+        """Calling apply_with() result with no arguments is a TypeError."""
+        gate = _utils.Gate()
+        aw = gate.apply_with(lambda target, *a, **kw: target(*a, **kw))
+
+        with pytest.raises(TypeError):
+            aw()
+
+    def test_apply_with_activates_executor_for_bound_calls(self):
+        """BoundGate calls inside f use the activated executor."""
+        gate = _utils.Gate()
+        received = []
+
+        def executor(target, *args, **kwargs):
+            received.append(target)
+            return target(*args, **kwargs)
+
+        bound = gate.bind(lambda: 99)
+        aw = gate.apply_with(executor)
+
+        # The orchestrating function calls the BoundGate
+        result = aw(lambda: bound())
+        assert result == 99
+        assert len(received) == 1  # executor saw the bound call
+
+    def test_apply_with_executor_can_short_circuit_bound(self):
+        """An executor can intercept bound calls made within apply_with."""
+        gate = _utils.Gate()
+
+        def replay_exec(target, *args, **kwargs):
+            return 'replayed'
+
+        def should_not_run():
+            raise RuntimeError("should not be called")
+
+        bound = gate.bind(should_not_run)
+        aw = gate.apply_with(replay_exec)
+
+        # The executor intercepts the BoundGate call
+        assert aw(lambda: bound()) == 'replayed'
+
+    def test_apply_with_multiple_bound_calls(self):
+        """Multiple BoundGate calls inside apply_with all go through executor."""
+        gate = _utils.Gate()
+        calls = []
+
+        def executor(target, *args, **kwargs):
+            calls.append('exec')
+            return target(*args, **kwargs)
+
+        aw = gate.apply_with(executor)
+        bound_add = gate.bind(lambda x, y: x + y)
+        bound_mul = gate.bind(lambda x, y: x * y)
+
+        def orchestrator():
+            a = bound_add(10, 20)
+            b = bound_mul(3, 4)
+            return a + b
+
+        result = aw(orchestrator)
+        assert result == 42  # 30 + 12
+        # executor was called for each BoundGate call
+        assert len(calls) == 2
+
+    def test_apply_with_repr(self):
+        gate = _utils.Gate()
+        def my_exec(target, *args, **kwargs):
+            return target(*args, **kwargs)
+        aw = gate.apply_with(my_exec)
+        assert 'ApplyWith' in repr(aw)
+
+    def test_apply_with_repr_disabled(self):
+        gate = _utils.Gate()
+        aw = gate.apply_with(None)
+        assert 'disabled' in repr(aw)
+
+    def test_apply_with_get_returns_executor(self):
+        gate = _utils.Gate()
+        def my_exec(target, *args, **kwargs):
+            return target(*args, **kwargs)
+        aw = gate.apply_with(my_exec)
+        assert aw.get() is my_exec
+
+    def test_apply_with_get_returns_none_when_disabled(self):
+        gate = _utils.Gate()
+        aw = gate.apply_with(None)
+        assert aw.get() is None
+
+    def test_apply_with_set_changes_executor(self):
+        gate = _utils.Gate()
+        calls = []
+
+        def exec_a(target, *args, **kwargs):
+            calls.append('a')
+            return target(*args, **kwargs)
+
+        def exec_b(target, *args, **kwargs):
+            calls.append('b')
+            return target(*args, **kwargs)
+
+        aw = gate.apply_with(exec_a)
+        bound = gate.bind(lambda: 'ok')
+
+        aw(lambda: bound())
+        assert calls == ['a']
+
+        aw.set(exec_b)
+        assert aw.get() is exec_b
+
+        aw(lambda: bound())
+        assert calls == ['a', 'b']
+
+    def test_apply_with_set_none_disables(self):
+        gate = _utils.Gate()
+        calls = []
+
+        def executor(target, *args, **kwargs):
+            calls.append('exec')
+            return target(*args, **kwargs)
+
+        aw = gate.apply_with(executor)
+        bound = gate.bind(lambda: 'data')
+
+        aw(lambda: bound())
+        assert calls == ['exec']
+
+        # Disable via set(None)
+        aw.set(None)
+        assert aw.get() is None
+        assert 'disabled' in repr(aw)
+
+        # BoundGate now passes through directly
+        result = aw(lambda: bound())
+        assert result == 'data'
+        assert calls == ['exec']  # no new executor call
+
+    def test_apply_with_set_rejects_non_callable(self):
+        gate = _utils.Gate()
+        aw = gate.apply_with(None)
+        with pytest.raises(TypeError):
+            aw.set(42)
+
+    def test_apply_with_none_disables_gate_during_call(self):
+        """gate.apply_with(None) temporarily disables the gate."""
+        gate = _utils.Gate()
+        calls = []
+
+        def active_exec(target, *args, **kwargs):
+            calls.append('exec')
+            return target(*args, **kwargs)
+
+        gate.set(active_exec)
+        bound = gate.bind(lambda: 'result')
+
+        # With active executor, bound goes through it
+        assert bound() == 'result'
+        assert calls == ['exec']
+
+        # apply_with(None) disables the gate for the duration
+        aw = gate.apply_with(None)
+        result = aw(lambda: bound())
+        assert result == 'result'
+        assert calls == ['exec']  # no new executor call — gate was disabled
+
+        # Active executor is restored after apply_with
+        assert gate.executor is active_exec
+
+
+class TestGatePredicate:
+    """Tests for gate.test() — C-level predicate checking gate executor identity."""
+
+    def test_returns_callable(self):
+        gate = utils.Gate()
+        pred = gate.test(None)
+        assert callable(pred)
+
+    def test_disabled_gate_matches_none(self):
+        gate = utils.Gate()
+        pred = gate.test(None)
+        # Gate starts disabled (executor is None/NULL)
+        assert pred() is True
+
+    def test_disabled_gate_does_not_match_executor(self):
+        gate = utils.Gate()
+        executor = lambda target, *a, **kw: target(*a, **kw)
+        pred = gate.test(executor)
+        # Gate is disabled, so current executor is not 'executor'
+        assert pred() is False
+
+    def test_active_gate_matches_executor(self):
+        gate = utils.Gate()
+        executor = lambda target, *a, **kw: target(*a, **kw)
+        gate.set(executor)
+        pred = gate.test(executor)
+        assert pred() is True
+
+    def test_active_gate_does_not_match_different_executor(self):
+        gate = utils.Gate()
+        exec_a = lambda target, *a, **kw: target(*a, **kw)
+        exec_b = lambda target, *a, **kw: target(*a, **kw)
+        gate.set(exec_a)
+        pred = gate.test(exec_b)
+        assert pred() is False
+
+    def test_active_gate_none_predicate_returns_false(self):
+        gate = utils.Gate()
+        executor = lambda target, *a, **kw: target(*a, **kw)
+        gate.set(executor)
+        pred = gate.test(None)
+        assert pred() is False
+
+    def test_identity_not_equality(self):
+        """test() uses identity (is), not equality (==)."""
+        gate = utils.Gate()
+        # Two distinct objects that are "equal" in value
+        exec_a = lambda target, *a, **kw: target(*a, **kw)
+        exec_b = lambda target, *a, **kw: target(*a, **kw)
+        gate.set(exec_a)
+        pred_a = gate.test(exec_a)
+        pred_b = gate.test(exec_b)
+        assert pred_a() is True
+        assert pred_b() is False  # different object
+
+    def test_tracks_gate_state_changes(self):
+        gate = utils.Gate()
+        executor = lambda target, *a, **kw: target(*a, **kw)
+        pred = gate.test(executor)
+        assert pred() is False  # gate disabled
+        gate.set(executor)
+        assert pred() is True   # now matches
+        gate.disable()
+        assert pred() is False  # disabled again
+
+    def test_ignores_arguments(self):
+        """Predicate should work regardless of what arguments are passed."""
+        gate = utils.Gate()
+        pred = gate.test(None)
+        # All of these should return True (gate is disabled = matches None)
+        assert pred() is True
+        assert pred(1) is True
+        assert pred(1, 2, 3) is True
+        assert pred(1, 2, key='val') is True
+
+    def test_ignores_arguments_when_false(self):
+        gate = utils.Gate()
+        executor = lambda target, *a, **kw: target(*a, **kw)
+        gate.set(executor)
+        pred = gate.test(None)
+        assert pred(1, 2, 3) is False
+
+    def test_repr_with_executor(self):
+        gate = utils.Gate()
+        def my_exec(target, *a, **kw): return target(*a, **kw)
+        pred = gate.test(my_exec)
+        r = repr(pred)
+        assert 'GatePredicate' in r
+        assert 'my_exec' in r
+
+    def test_repr_disabled(self):
+        gate = utils.Gate()
+        pred = gate.test(None)
+        r = repr(pred)
+        assert 'GatePredicate' in r
+        assert 'disabled' in r
+
+    def test_multiple_predicates_same_gate(self):
+        gate = utils.Gate()
+        exec_a = lambda target, *a, **kw: 'a'
+        exec_b = lambda target, *a, **kw: 'b'
+        pred_a = gate.test(exec_a)
+        pred_b = gate.test(exec_b)
+        pred_none = gate.test(None)
+
+        # Gate disabled
+        assert pred_none() is True
+        assert pred_a() is False
+        assert pred_b() is False
+
+        # Set to exec_a
+        gate.set(exec_a)
+        assert pred_none() is False
+        assert pred_a() is True
+        assert pred_b() is False
+
+        # Set to exec_b
+        gate.set(exec_b)
+        assert pred_none() is False
+        assert pred_a() is False
+        assert pred_b() is True
+
+    def test_not_directly_instantiable(self):
+        """GatePredicate should not be instantiable from Python."""
+        gate = utils.Gate()
+        pred = gate.test(None)
+        with pytest.raises(TypeError):
+            type(pred)()
+

@@ -77,6 +77,12 @@ namespace retracesoftware {
     extern PyTypeObject StackFactory_Type;
     extern PyTypeObject Stack_Type;
 
+    extern PyTypeObject Gate_Type;
+    extern PyTypeObject BoundGate_Type;
+    extern PyTypeObject GateContext_Type;
+    extern PyTypeObject ApplyWith_Type;
+    extern PyTypeObject GatePredicate_Type;
+
     void force_full_gc(void);
 
     struct ModuleState {

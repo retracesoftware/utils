@@ -646,6 +646,10 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::FrameEval_Type,
         &retracesoftware::NewWrapper_Type,
         &retracesoftware::DictIntercept_Type,
+        &retracesoftware::BoundGate_Type,
+        &retracesoftware::GateContext_Type,
+        &retracesoftware::ApplyWith_Type,
+        &retracesoftware::GatePredicate_Type,
         nullptr
     };
 
@@ -684,6 +688,7 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::RunAll_Type,
         &retracesoftware::StackFactory_Type,
         &retracesoftware::Stack_Type,
+        &retracesoftware::Gate_Type,
         NULL
     };
 

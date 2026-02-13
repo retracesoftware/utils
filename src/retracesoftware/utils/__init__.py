@@ -132,6 +132,20 @@ def wrap_func_with_overrides(func, **overrides):
     )
 
 
+def patch_hashes(hashfunc, *types):
+    """Patch ``__hash__`` on each type in *types* for deterministic ordering.
+
+    Python's default ``__hash__`` is based on ``id()`` (memory address),
+    which varies between runs.  Sets iterate in hash order, so iteration
+    order becomes non-deterministic.  This replaces ``__hash__`` with
+    *hashfunc*, giving stable set/dict-key ordering for record/replay.
+
+    Call once during bootstrap, before any modules are loaded.
+    """
+    for cls in types:
+        _backend_mod.patch_hash(cls, hashfunc)
+
+
 def update(obj, name, f, *args, **kwargs):
     value = getattr(obj, name)
     setattr(obj, name, f(value, *args, **kwargs))
