@@ -2173,6 +2173,129 @@ class TestApplyWith:
         # Active executor is restored after apply_with
         assert gate.executor is active_exec
 
+    def test_apply_with_propagates_exception_when_gate_was_disabled(self):
+        """Exception must propagate when gate was disabled before apply_with.
+
+        Regression: set_executor(NULL) in the restore path called
+        PyErr_Clear() unconditionally, swallowing the pending exception.
+        This caused 'SystemError: returned NULL without setting an error'.
+        """
+        gate = _utils.Gate()
+
+        def executor(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        aw = gate.apply_with(executor)
+
+        # Gate starts disabled (prev = NULL in the C code)
+        assert gate.executor is None
+
+        with pytest.raises(ValueError, match="boom"):
+            aw(lambda: (_ for _ in ()).throw(ValueError("boom")))
+
+        # Gate is restored to disabled
+        assert gate.executor is None
+
+    def test_apply_with_propagates_exception_from_bound_gate(self):
+        """Exception from a BoundGate inside apply_with must propagate."""
+        gate = _utils.Gate()
+
+        def executor(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        def explode():
+            raise RuntimeError("kaboom from bound")
+
+        bound = gate.bind(explode)
+        aw = gate.apply_with(executor)
+
+        with pytest.raises(RuntimeError, match="kaboom from bound"):
+            aw(lambda: bound())
+
+        assert gate.executor is None
+
+    def test_apply_with_recursive_exception_propagation(self):
+        """Exception propagates through nested apply_with calls.
+
+        Outer apply_with starts with gate disabled (prev=NULL).
+        Inner code triggers a BoundGate call through the executor,
+        which raises. The exception must survive the outer restore.
+        """
+        gate = _utils.Gate()
+        call_log = []
+
+        def executor(target, *args, **kwargs):
+            call_log.append('exec')
+            return target(*args, **kwargs)
+
+        bound = gate.bind(lambda: (_ for _ in ()).throw(ValueError("deep")))
+        aw = gate.apply_with(executor)
+
+        # Gate is disabled — prev will be NULL in the C code
+        assert gate.executor is None
+
+        with pytest.raises(ValueError, match="deep"):
+            aw(lambda: bound())
+
+        assert gate.executor is None
+        assert call_log == ['exec']
+
+    def test_apply_with_nested_apply_with_exception(self):
+        """Exception propagates through two levels of apply_with.
+
+        Outer: gate disabled → apply_with(exec_A)
+        Inner: exec_A active → apply_with(None) to disable
+        Function raises inside the disabled zone.
+        Exception must survive both restore paths.
+        """
+        gate = _utils.Gate()
+
+        def exec_a(target, *args, **kwargs):
+            return target(*args, **kwargs)
+
+        aw_outer = gate.apply_with(exec_a)
+        aw_inner = gate.apply_with(None)
+
+        def nested_raise():
+            # Inside here: gate is disabled by aw_inner
+            raise TypeError("nested error")
+
+        def orchestrator():
+            # aw_inner temporarily disables the gate
+            return aw_inner(nested_raise)
+
+        with pytest.raises(TypeError, match="nested error"):
+            aw_outer(orchestrator)
+
+        # Both restores ran, gate is back to disabled
+        assert gate.executor is None
+
+    def test_apply_with_recursive_with_bound_exception(self):
+        """Full recursive pattern: apply_with → BoundGate → executor → apply_with(None) → raise.
+
+        This mimics the real System.record_context pattern:
+          - ext_executor set via apply_with(ext_exec) (gate was disabled)
+          - BoundGate call routes through ext_exec
+          - ext_exec uses apply_with(None) to disable gate during execution
+          - The real function raises inside the disabled zone
+          - Exception must propagate all the way back
+        """
+        gate = _utils.Gate()
+
+        def ext_exec(target, *args, **kwargs):
+            # Simulate the System pattern: temporarily disable gate
+            # while calling the real function
+            disable = gate.apply_with(None)
+            return disable(target, *args, **kwargs)
+
+        bound = gate.bind(lambda: (_ for _ in ()).throw(IOError("network down")))
+        aw = gate.apply_with(ext_exec)
+
+        with pytest.raises(IOError, match="network down"):
+            aw(lambda: bound())
+
+        assert gate.executor is None
+
 
 class TestGatePredicate:
     """Tests for gate.test() — C-level predicate checking gate executor identity."""

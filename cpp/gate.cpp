@@ -80,8 +80,9 @@ namespace retracesoftware {
                 PyDict_SetItem(dict, (PyObject *)this, exec);
                 cache.executor = FastCall(exec);
             } else {
-                PyDict_DelItem(dict, (PyObject *)this);
-                PyErr_Clear();
+                if (PyDict_DelItem(dict, (PyObject *)this) < 0) {
+                    PyErr_Clear();  // suppress KeyError when key wasn't in dict
+                }
                 // Clearing override: use default if set, else disabled
                 cache.executor = this->default_executor ? FastCall(this->default_executor) : FastCall();
             }

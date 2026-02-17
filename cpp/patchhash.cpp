@@ -187,26 +187,47 @@ namespace retracesoftware {
 
     /**
      * The tp_dealloc implementation installed on patched types.
-     * 
-     * Removes the object's cached hash (if any) before calling the original
-     * deallocator. This prevents memory leaks and stale cache entries.
      *
-     * IMPORTANT: We must temporarily restore the original tp_dealloc while calling
-     * it because Python's subtype_dealloc reads type->tp_dealloc to find the base
-     * deallocator. If it sees our patched_dealloc instead of itself, it enters
-     * an infinite recursion loop.
+     * Removes the object's cached hash (if any) before chaining to the
+     * original deallocator.
+     *
+     * Subtype resolution
+     * ------------------
+     * Py_TYPE(self) is often a *subclass* of the type we patched.  For
+     * example, when we patch `object`, a `threading.Thread` instance
+     * reaches us because CPython's subtype_dealloc walks tp_base until
+     * it finds a dealloc that is not subtype_dealloc — which is our
+     * patched_dealloc sitting on `object`.
+     *
+     * We must therefore walk tp_base ourselves to locate the actual
+     * patched type (the one registered in `hashers`) and only swap
+     * *that* type's tp_dealloc.  Modifying Py_TYPE(self)->tp_dealloc
+     * instead would corrupt the subclass's type struct — setting e.g.
+     * Thread->tp_dealloc to object_dealloc and then to patched_dealloc,
+     * permanently bypassing subtype_dealloc for all future Thread
+     * instances and causing a segfault at interpreter shutdown.
+     *
+     * Temporary restore
+     * -----------------
+     * We temporarily restore the original tp_dealloc on the patched
+     * type before chaining, because subtype_dealloc reads
+     * tp_base->tp_dealloc to decide how to chain.  If it still sees
+     * patched_dealloc it re-enters us and infinite-loops.
      */
     static void patched_dealloc(PyObject * self) {
-        hashes.erase(self);  // Clean up cached hash
-        
-        PyTypeObject* type = Py_TYPE(self);
-        Hasher& hasher = find_hasher(type);
-        
-        // Temporarily restore original tp_dealloc to prevent subtype_dealloc recursion
-        type->tp_dealloc = hasher.dealloc;
-        hasher.dealloc(self);  // Chain to original dealloc (object is freed here)
-        // Restore our patched dealloc for future objects
-        type->tp_dealloc = patched_dealloc;
+        hashes.erase(self);
+
+        // Find the patched base type — may differ from Py_TYPE(self).
+        PyTypeObject* patched_type = Py_TYPE(self);
+        while (hashers.find(patched_type) == hashers.end()) {
+            patched_type = patched_type->tp_base;
+        }
+        Hasher& hasher = hashers.find(patched_type)->second;
+
+        // Swap, chain, restore — only on the patched type.
+        patched_type->tp_dealloc = hasher.dealloc;
+        hasher.dealloc(self);
+        patched_type->tp_dealloc = patched_dealloc;
     }
 
     /**
