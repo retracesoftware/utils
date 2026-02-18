@@ -1638,8 +1638,46 @@ class TestGateBind:
         assert calls == ['func_a', 'func_b']
 
 
+class TestGateCall:
+    """Tests for gate(*args) dispatching to executor."""
+
+    def test_call_dispatches_to_executor(self):
+        gate = _utils.Gate()
+        results = []
+        gate.set(lambda *a, **kw: results.append(a))
+
+        gate(42)
+        assert results == [(42,)]
+
+    def test_call_returns_executor_result(self):
+        gate = _utils.Gate()
+        gate.set(lambda x: x * 2)
+        assert gate(21) == 42
+
+    def test_call_disabled_returns_none(self):
+        gate = _utils.Gate()
+        assert gate(42) is None
+
+    def test_call_default_executor(self):
+        results = []
+        gate = _utils.Gate(default=lambda *a: results.append(a))
+        gate(99)
+        assert results == [(99,)]
+
+    def test_call_passes_kwargs(self):
+        gate = _utils.Gate()
+        gate.set(lambda *a, **kw: kw)
+        assert gate(key='value') == {'key': 'value'}
+
+    def test_call_with_non_callable_arg(self):
+        """gate(x) should pass x to executor, not require x to be callable."""
+        gate = _utils.Gate()
+        gate.set(lambda x: x)
+        assert gate(128) == 128
+
+
 class TestGateContextManager:
-    """Tests for gate(executor) context manager."""
+    """Tests for gate.context(executor) context manager."""
 
     def test_context_sets_and_restores(self):
         gate = _utils.Gate()
@@ -1647,7 +1685,7 @@ class TestGateContextManager:
 
         assert gate.executor is None
 
-        with gate(executor):
+        with gate.context(executor):
             assert gate.executor is executor
 
         assert gate.executor is None
@@ -1659,7 +1697,7 @@ class TestGateContextManager:
 
         gate.set(exec1)
 
-        with gate(exec2):
+        with gate.context(exec2):
             assert gate.executor is exec2
 
         assert gate.executor is exec1
@@ -1677,11 +1715,11 @@ class TestGateContextManager:
 
         assert bound() == 'direct'
 
-        with gate(exec1):
+        with gate.context(exec1):
             assert bound() == 'exec1'
-            with gate(exec2):
+            with gate.context(exec2):
                 assert bound() == 'exec2'
-                with gate(exec3):
+                with gate.context(exec3):
                     assert bound() == 'exec3'
                 assert bound() == 'exec2'
             assert bound() == 'exec1'
@@ -1698,7 +1736,7 @@ class TestGateContextManager:
 
         assert bound() == 'intercepted'
 
-        with gate(None):
+        with gate.context(None):
             assert bound() == 'direct'
 
         assert bound() == 'intercepted'
@@ -1711,7 +1749,7 @@ class TestGateContextManager:
         other_exec = lambda target, *a, **kw: target(*a, **kw)
 
         try:
-            with gate(other_exec):
+            with gate.context(other_exec):
                 assert gate.executor is other_exec
                 raise ValueError("boom")
         except ValueError:
@@ -1722,7 +1760,7 @@ class TestGateContextManager:
     def test_context_non_callable_raises(self):
         gate = _utils.Gate()
         with pytest.raises(TypeError):
-            gate(42)
+            gate.context(42)
 
 
 class TestGateThreadIsolation:
@@ -1785,13 +1823,13 @@ class TestGateThreadIsolation:
             return 'B:' + target(*a, **kw)
 
         def thread_a():
-            with gate(exec_a):
+            with gate.context(exec_a):
                 barrier.wait(timeout=5)  # sync
                 results['a'] = bound()
                 barrier.wait(timeout=5)  # sync
 
         def thread_b():
-            with gate(exec_b):
+            with gate.context(exec_b):
                 barrier.wait(timeout=5)  # sync
                 results['b'] = bound()
                 barrier.wait(timeout=5)  # sync

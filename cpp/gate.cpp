@@ -139,8 +139,11 @@ namespace retracesoftware {
         static PyObject * apply_with(Gate * self, PyObject * executor);
         static PyObject * test(Gate * self, PyObject * executor);
 
-        // gate(executor) returns a context manager — implemented after GateContext definition
+        // gate(*args, **kwargs) dispatches to the current executor
         static PyObject * call(Gate * self, PyObject ** args, size_t nargsf, PyObject * kwnames);
+
+        // gate.context(executor) returns a GateContext context manager
+        static PyObject * context(Gate * self, PyObject * executor);
 
         static PyObject * executor_get(Gate * self, void * Py_UNUSED(closure)) {
             PyObject * exec = self->executor();
@@ -342,7 +345,7 @@ namespace retracesoftware {
     //   4. Restore previous executor
     //   5. Return result
     //
-    // This is an inlined `with gate(executor): return f(*args, **kwargs)`
+    // This is an inlined `with gate.context(executor): return f(*args, **kwargs)`
     // without context manager allocation on every call.
     // ========================================================================
 
@@ -488,16 +491,17 @@ namespace retracesoftware {
     // --- Deferred implementations (need complete types) ---
 
     PyObject * Gate::call(Gate * self, PyObject ** args, size_t nargsf, PyObject * kwnames) {
-        Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
-
-        if (nargs != 1 || (kwnames && PyTuple_GET_SIZE(kwnames) > 0)) {
-            PyErr_SetString(PyExc_TypeError, "Gate context manager takes exactly one argument: the executor");
-            return nullptr;
+        PyObject * exec = self->executor();
+        if (exec == nullptr) {
+            Py_RETURN_NONE;
         }
+        return PyObject_Vectorcall(exec, args, nargsf, kwnames);
+    }
 
-        PyObject * executor = args[0];
+    PyObject * Gate::context(Gate * self, PyObject * executor) {
         if (executor != Py_None && !PyCallable_Check(executor)) {
-            PyErr_Format(PyExc_TypeError, "executor must be callable or None, got %S", executor);
+            PyErr_Format(PyExc_TypeError,
+                "context() argument must be callable or None, got %S", executor);
             return nullptr;
         }
 
@@ -521,6 +525,7 @@ namespace retracesoftware {
         {"bind", (PyCFunction)Gate::bind, METH_O, "Bind a target callable to this gate, returning a BoundGate wrapper"},
         {"apply_with", (PyCFunction)Gate::apply_with, METH_O, "Return an ApplyWith callable that temporarily sets the executor when called"},
         {"test", (PyCFunction)Gate::test, METH_O, "Return a predicate that tests if the gate's executor is a specific object"},
+        {"context", (PyCFunction)Gate::context, METH_O, "Return a context manager that temporarily sets the executor"},
         {NULL, NULL, 0, NULL}
     };
 
@@ -544,7 +549,8 @@ namespace retracesoftware {
                   "Create a Gate, bind functions to it, then set/disable the executor per thread.\n"
                   "When disabled (default), bound functions call through directly.\n"
                   "When set, all bound calls go through: executor(target, *args, **kwargs).\n"
-                  "Use as a context manager: with gate(executor): ...",
+                  "Calling gate(*args) dispatches to executor(*args).\n"
+                  "Use gate.context(executor) for a context manager.",
         .tp_methods = Gate_methods,
         .tp_getset = Gate_getset,
         .tp_init = (initproc)Gate::init,
