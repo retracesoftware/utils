@@ -83,6 +83,18 @@ namespace retracesoftware {
     extern PyTypeObject ApplyWith_Type;
     extern PyTypeObject GatePredicate_Type;
 
+    extern PyTypeObject MemoryAddresses_Type;
+    extern PyTypeObject Remover_Type;
+    extern PyTypeObject Branch_Type;
+
+    extern PyTypeObject ThreadLocal_Type;
+    extern PyTypeObject ThreadLocalContext_Type;
+
+    extern PyTypeObject ThreadContextWrapper_Type;
+
+    PyObject *start_new_thread_wrapper(PyObject *module, PyObject *const *args, Py_ssize_t nargs);
+    bool threadcontext_init(PyObject *module);
+
     void force_full_gc(void);
 
     struct ModuleState {

@@ -356,20 +356,6 @@ static PyObject * is_method_descriptor(PyObject * module, PyObject * obj) {
     return PyBool_FromLong(PyType_HasFeature(Py_TYPE(obj), Py_TPFLAGS_METHOD_DESCRIPTOR));
 }
 
-static PyObject * thread_id(PyObject * module, PyObject * unused) {
-    PyObject * id = PyDict_GetItem(PyThreadState_GetDict(), module);
-
-    return Py_NewRef(id ? id : Py_None);
-}
-
-static PyObject * set_thread_id(PyObject * module, PyObject * id) {
-
-    if (PyDict_SetItem(PyThreadState_GetDict(), module, Py_NewRef(id)) == -1) {
-        Py_DECREF(id);        
-        return nullptr;
-    }
-    Py_RETURN_NONE;
-}
 
 static PyObject * intercept_frame_eval(PyObject * module, PyObject * handler) {
     if (!retracesoftware::FrameEval_Install(PyInterpreterState_Get(), handler)) {
@@ -536,8 +522,8 @@ static PyMethodDef module_methods[] = {
     {"extend_type", extend_type, METH_O, "TODO"},
     {"patch_hash", (PyCFunction)patch_hash, METH_VARARGS | METH_KEYWORDS, "Tests if the given type has an identity hash"},
     {"is_identity_hash", is_identity_hash, METH_O, "Tests if the given type has an identity hash"},
-    {"thread_id", (PyCFunction)thread_id, METH_NOARGS, "TODO"},
-    {"set_thread_id", (PyCFunction)set_thread_id, METH_O, "TODO"},
+    {"start_new_thread_wrapper", (PyCFunction)retracesoftware::start_new_thread_wrapper, METH_FASTCALL,
+     "start_new_thread_wrapper(original, middleware, fn, args[, kwargs])"},
     {"is_method_descriptor", is_method_descriptor, METH_O, "Returns if the object is a method descriptor"},
     {"is_wrapped", is_wrapped, METH_O, "Returns if the object is wrapped"},
     {"create_stub_object", create_stub_object, METH_O, "Creates a stub object given the type, but bypasses __new__ and __init__ initialization"},
@@ -650,6 +636,10 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::GateContext_Type,
         &retracesoftware::ApplyWith_Type,
         &retracesoftware::GatePredicate_Type,
+        &retracesoftware::Remover_Type,
+        &retracesoftware::Branch_Type,
+        &retracesoftware::ThreadContextWrapper_Type,
+        &retracesoftware::ThreadLocalContext_Type,
         nullptr
     };
 
@@ -689,6 +679,8 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::StackFactory_Type,
         &retracesoftware::Stack_Type,
         &retracesoftware::Gate_Type,
+        &retracesoftware::MemoryAddresses_Type,
+        &retracesoftware::ThreadLocal_Type,
         NULL
     };
 
@@ -710,6 +702,11 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
     }
 
     PyModule_AddObject(module, "TypeFlags", create_type_flags());
+
+    if (!retracesoftware::threadcontext_init(module)) {
+        Py_DECREF(module);
+        return NULL;
+    }
 
     return module;
 }

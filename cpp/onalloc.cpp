@@ -7,6 +7,8 @@ using namespace ankerl::unordered_dense;
 namespace retracesoftware {
 
     static map<PyTypeObject *, allocfunc> allocfuncs;
+    static map<PyTypeObject *, destructor> deallocfuncs;
+    static map<PyObject *, PyObject *> dealloc_callbacks;
 
     static PyObject * key() {
         static PyObject * name = nullptr;
@@ -17,23 +19,63 @@ namespace retracesoftware {
     static PyObject * find_callback(PyTypeObject * cls) {
         while (cls) {
             PyObject * callback = PyDict_GetItem(cls->tp_dict, key());
-
             if (callback) return callback;
+            cls = cls->tp_base;
         }
         return nullptr;
     }
-    
+
     static bool call_callback(PyObject * allocated) {
         PyObject * callback = find_callback(Py_TYPE(allocated));
+        if (!callback) return true;
 
-        if (callback) {
-            PyObject * result = PyObject_CallOneArg(callback, allocated);
-            Py_XDECREF(result);
-            if (!result) {
-                return false;
-            }
+        PyObject * result = PyObject_CallOneArg(callback, allocated);
+        if (!result) return false;
+
+        if (result == Py_None) {
+            Py_DECREF(result);
+            return true;
         }
-        return true;
+
+        if (PyCallable_Check(result)) {
+            dealloc_callbacks[allocated] = result;  // steals the reference
+            return true;
+        }
+
+        Py_DECREF(result);
+        PyErr_Format(PyExc_TypeError,
+            "__retrace_on_alloc__ callback must return None or a callable, "
+            "got %.200s", Py_TYPE(result)->tp_name);
+        return false;
+    }
+
+    static void generic_dealloc(PyObject * obj) {
+        auto it = dealloc_callbacks.find(obj);
+        if (it != dealloc_callbacks.end()) {
+            PyObject * cb = it->second;
+            dealloc_callbacks.erase(it);
+
+            Py_SET_REFCNT(obj, 1);
+            PyObject * r = PyObject_CallNoArgs(cb);
+            Py_XDECREF(r);
+            Py_DECREF(cb);
+            if (!r) PyErr_Clear();
+
+            if (Py_REFCNT(obj) > 1) {
+                Py_SET_REFCNT(obj, Py_REFCNT(obj) - 1);
+                return;
+            }
+            Py_SET_REFCNT(obj, 0);
+        }
+
+        PyTypeObject * type = Py_TYPE(obj);
+        auto dit = deallocfuncs.find(type);
+        if (dit != deallocfuncs.end()) {
+            destructor original = dit->second;
+            type->tp_dealloc = original;
+            original(obj);
+            type->tp_dealloc = generic_dealloc;
+        }
     }
 
     static PyObject * generic_alloc(PyTypeObject *type, Py_ssize_t nitems) {
@@ -67,8 +109,8 @@ namespace retracesoftware {
         }
         return obj;
     }
-    
-    static bool is_patched(allocfunc func) {
+
+    static bool is_alloc_patched(allocfunc func) {
         return func == PyType_GenericAlloc_Wrapper || func == generic_alloc;
     }
 
@@ -81,10 +123,18 @@ namespace retracesoftware {
         }
     }
 
+    static void patch_dealloc(PyTypeObject * cls) {
+        if (cls->tp_dealloc && cls->tp_dealloc != generic_dealloc) {
+            deallocfuncs[cls] = cls->tp_dealloc;
+            cls->tp_dealloc = generic_dealloc;
+        }
+    }
+
     bool set_on_alloc(PyTypeObject *type, PyObject * callback) {
-        if (!is_patched(type->tp_alloc)) {
+        if (!is_alloc_patched(type->tp_alloc)) {
             patch_alloc(type);
         }
+        patch_dealloc(type);
         return PyDict_SetItem(type->tp_dict, key(), callback) == 0 ? true : false;
     }
 }

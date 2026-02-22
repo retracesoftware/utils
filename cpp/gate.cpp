@@ -80,10 +80,19 @@ namespace retracesoftware {
                 PyDict_SetItem(dict, (PyObject *)this, exec);
                 cache.executor = FastCall(exec);
             } else {
+                // Save any in-flight exception so PyDict_DelItem's
+                // KeyError suppression doesn't swallow it.
+                PyObject *err_type, *err_value, *err_tb;
+                PyErr_Fetch(&err_type, &err_value, &err_tb);
+
                 if (PyDict_DelItem(dict, (PyObject *)this) < 0) {
-                    PyErr_Clear();  // suppress KeyError when key wasn't in dict
+                    PyErr_Clear();
                 }
-                // Clearing override: use default if set, else disabled
+
+                if (err_type) {
+                    PyErr_Restore(err_type, err_value, err_tb);
+                }
+
                 cache.executor = this->default_executor ? FastCall(this->default_executor) : FastCall();
             }
 
@@ -493,7 +502,11 @@ namespace retracesoftware {
     PyObject * Gate::call(Gate * self, PyObject ** args, size_t nargsf, PyObject * kwnames) {
         PyObject * exec = self->executor();
         if (exec == nullptr) {
-            Py_RETURN_NONE;
+            Py_ssize_t nargs = PyVectorcall_NARGS(nargsf);
+            if (nargs == 0) Py_RETURN_NONE;
+            return PyObject_Vectorcall(args[0], args + 1,
+                (nargs - 1) | (nargsf & PY_VECTORCALL_ARGUMENTS_OFFSET),
+                kwnames);
         }
         return PyObject_Vectorcall(exec, args, nargsf, kwnames);
     }
@@ -575,6 +588,13 @@ namespace retracesoftware {
         .tp_methods = GateContext_methods,
     };
 
+    static PyGetSetDef BoundGate_getset[] = {
+        {"__wrapped__", (getter)+[](PyObject * self, void *) -> PyObject * {
+            return Py_NewRef(((BoundGate *)self)->target.callable);
+        }, NULL, "The original wrapped callable", NULL},
+        {NULL, NULL, NULL, NULL, NULL}
+    };
+
     PyTypeObject BoundGate_Type = {
         .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
         .tp_name = MODULE "BoundGate",
@@ -591,6 +611,7 @@ namespace retracesoftware {
         .tp_doc = "A callable bound to a Gate. Delegates to the gate's thread-local executor.",
         .tp_traverse = (traverseproc)BoundGate::traverse,
         .tp_clear = (inquiry)BoundGate::clear,
+        .tp_getset = BoundGate_getset,
     };
 
     static PyMethodDef ApplyWith_methods[] = {

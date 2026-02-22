@@ -1654,9 +1654,12 @@ class TestGateCall:
         gate.set(lambda x: x * 2)
         assert gate(21) == 42
 
-    def test_call_disabled_returns_none(self):
+    def test_call_disabled_applies_first_arg(self):
+        """When disabled, gate(f, *a) calls f(*a) — apply-first-arg semantics."""
         gate = _utils.Gate()
-        assert gate(42) is None
+        assert gate(lambda: 99) == 99
+        assert gate(lambda x, y: x + y, 3, 4) == 7
+        assert gate() is None
 
     def test_call_default_executor(self):
         results = []
@@ -2463,4 +2466,369 @@ class TestGatePredicate:
         pred = gate.test(None)
         with pytest.raises(TypeError):
             type(pred)()
+
+
+class TestMemoryAddresses:
+    def test_empty(self):
+        ma = utils.MemoryAddresses()
+        assert len(ma) == 0
+
+    def test_add_contains(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        ma.add(obj)
+        assert obj in ma
+        assert len(ma) == 1
+
+    def test_not_contains(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        assert obj not in ma
+
+    def test_remover_removes(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        remover = ma.add(obj)
+        assert obj in ma
+        remover()
+        assert obj not in ma
+        assert len(ma) == 0
+
+    def test_remover_idempotent(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        remover = ma.add(obj)
+        remover()
+        remover()
+        assert obj not in ma
+
+    def test_multiple_objects(self):
+        ma = utils.MemoryAddresses()
+        a, b, c = object(), object(), object()
+        ra = ma.add(a)
+        rb = ma.add(b)
+        rc = ma.add(c)
+        assert len(ma) == 3
+        assert a in ma and b in ma and c in ma
+
+        rb()
+        assert len(ma) == 2
+        assert a in ma and b not in ma and c in ma
+
+        ra()
+        rc()
+        assert len(ma) == 0
+
+    def test_remover_is_callable(self):
+        ma = utils.MemoryAddresses()
+        remover = ma.add(object())
+        assert callable(remover)
+
+    def test_remover_rejects_arguments(self):
+        ma = utils.MemoryAddresses()
+        remover = ma.add(object())
+        with pytest.raises(TypeError):
+            remover("unexpected")
+
+    def test_add_same_object_twice(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        r1 = ma.add(obj)
+        r2 = ma.add(obj)
+        assert len(ma) == 1
+        r1()
+        assert obj not in ma
+        r2()
+
+    def test_no_prevent_gc(self):
+        """MemoryAddresses should NOT prevent garbage collection."""
+        import weakref
+        import gc
+        ma = utils.MemoryAddresses()
+
+        class C:
+            pass
+
+        obj = C()
+        ref = weakref.ref(obj)
+        ma.add(obj)
+        assert obj in ma
+
+        del obj
+        gc.collect()
+        assert ref() is None
+
+    def test_branch_dispatches_to_member(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        ma.add(obj)
+        results = []
+        b = ma.branch(lambda o: results.append(('member', o)),
+                       lambda o: results.append(('non_member', o)))
+        b(obj)
+        assert results == [('member', obj)]
+
+    def test_branch_dispatches_to_non_member(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        results = []
+        b = ma.branch(lambda o: results.append(('member', o)),
+                       lambda o: results.append(('non_member', o)))
+        b(obj)
+        assert results == [('non_member', obj)]
+
+    def test_branch_returns_fn_result(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        ma.add(obj)
+        b = ma.branch(lambda o: 'yes', lambda o: 'no')
+        assert b(obj) == 'yes'
+        other = object()
+        assert b(other) == 'no'
+
+    def test_branch_none_returns_none(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        ma.add(obj)
+        b = ma.branch(None, lambda o: 'no')
+        assert b(obj) is None
+
+        b2 = ma.branch(lambda o: 'yes', None)
+        other = object()
+        assert b2(other) is None
+
+    def test_branch_reflects_mutations(self):
+        ma = utils.MemoryAddresses()
+        obj = object()
+        b = ma.branch(lambda o: 'member', lambda o: 'non_member')
+        assert b(obj) == 'non_member'
+        remover = ma.add(obj)
+        assert b(obj) == 'member'
+        remover()
+        assert b(obj) == 'non_member'
+
+    def test_branch_is_callable(self):
+        ma = utils.MemoryAddresses()
+        b = ma.branch(lambda o: None, lambda o: None)
+        assert callable(b)
+
+    def test_branch_wrong_arg_count(self):
+        ma = utils.MemoryAddresses()
+        b = ma.branch(lambda o: None, lambda o: None)
+        with pytest.raises(TypeError):
+            b()
+        with pytest.raises(TypeError):
+            b(object(), object())
+
+    def test_branch_requires_two_args(self):
+        ma = utils.MemoryAddresses()
+        with pytest.raises(TypeError):
+            ma.branch(lambda o: None)
+        with pytest.raises(TypeError):
+            ma.branch()
+
+    def test_branch_rejects_non_callable(self):
+        ma = utils.MemoryAddresses()
+        with pytest.raises(TypeError):
+            ma.branch(42, lambda o: None)
+        with pytest.raises(TypeError):
+            ma.branch(lambda o: None, 42)
+
+
+# ============================================================================
+# Thread middleware tests
+# ============================================================================
+
+import threading
+import _thread
+
+
+class TestMiddleware:
+    """Verify the thread middleware system (add/remove, CM execution)."""
+
+    def test_add_and_remove_custom_middleware(self):
+        entered = []
+
+        class MyCM:
+            def __enter__(self):
+                entered.append(True)
+                return self
+            def __exit__(self, *args):
+                pass
+
+        def my_factory():
+            return MyCM()
+
+        remover = _utils.add_thread_middleware(my_factory)
+        assert callable(remover)
+
+        t = threading.Thread(target=lambda: None)
+        t.start()
+        t.join()
+        assert len(entered) > 0
+
+        count_before = len(entered)
+        remover()
+
+        t2 = threading.Thread(target=lambda: None)
+        t2.start()
+        t2.join()
+        assert len(entered) == count_before
+
+    def test_middleware_list_exists(self):
+        assert hasattr(_utils, '_thread_middleware')
+        assert isinstance(_utils._thread_middleware, list)
+
+    def test_start_new_thread_is_patched(self):
+        import retracesoftware.functional as functional
+        assert isinstance(_thread.start_new_thread, functional.partial)
+
+
+# ============================================================================
+# ThreadLocal tests
+# ============================================================================
+
+
+class TestThreadLocal:
+    """Tests for ThreadLocal: set, get, context."""
+
+    def test_set_and_get(self):
+        tl = _utils.ThreadLocal()
+        tl.set(42)
+        assert tl.get() == 42
+
+    def test_get_default(self):
+        tl = _utils.ThreadLocal()
+        assert tl.get() is None
+        assert tl.get(default=7) == 7
+
+    def test_isolation(self):
+        tl = _utils.ThreadLocal()
+        tl.set('main')
+        result = {}
+
+        def child():
+            result['before'] = tl.get()
+            tl.set('child')
+            result['after'] = tl.get()
+
+        t = threading.Thread(target=child)
+        t.start()
+        t.join()
+
+        assert result['before'] is None
+        assert result['after'] == 'child'
+        assert tl.get() == 'main'
+
+    def test_context_sets_and_restores(self):
+        tl = _utils.ThreadLocal()
+        tl.set('before')
+        with tl.context('during'):
+            assert tl.get() == 'during'
+        assert tl.get() == 'before'
+
+    def test_context_unset_restores_to_unset(self):
+        tl = _utils.ThreadLocal()
+        with tl.context(99):
+            assert tl.get() == 99
+        assert tl.get() is None
+
+    def test_context_in_child_thread(self):
+        tl = _utils.ThreadLocal()
+        tl.set('main')
+        result = {}
+
+        def child():
+            result['before'] = tl.get()
+            with tl.context('child_ctx'):
+                result['during'] = tl.get()
+            result['after'] = tl.get()
+
+        t = threading.Thread(target=child)
+        t.start()
+        t.join()
+
+        assert result['before'] is None
+        assert result['during'] == 'child_ctx'
+        assert result['after'] is None
+        assert tl.get() == 'main'
+
+
+class TestChain:
+
+    def test_all_none_returns_none(self):
+        assert _utils.chain(None, None) is None
+
+    def test_no_args_returns_none(self):
+        assert _utils.chain() is None
+
+    def test_single_none_returns_none(self):
+        assert _utils.chain(None) is None
+
+    def test_single_func_returned_directly(self):
+        def f(x): return x
+        assert _utils.chain(f) is f
+
+    def test_single_func_with_nones_returned_directly(self):
+        def f(x): return x
+        assert _utils.chain(None, f, None) is f
+
+    def test_calls_all_funcs_with_same_args(self):
+        calls = []
+        def a(*args, **kw): calls.append(('a', args, kw))
+        def b(*args, **kw): calls.append(('b', args, kw))
+        def c(*args, **kw): calls.append(('c', args, kw))
+
+        chained = _utils.chain(a, b, c)
+        chained(1, 2, key='val')
+
+        assert calls == [
+            ('a', (1, 2), {'key': 'val'}),
+            ('b', (1, 2), {'key': 'val'}),
+            ('c', (1, 2), {'key': 'val'}),
+        ]
+
+    def test_preserves_last_return_value(self):
+        def a(x): return 'from_a'
+        def b(x): return 'from_b'
+        def c(x): return 'from_c'
+
+        chained = _utils.chain(a, b, c)
+        assert chained(42) == 'from_c'
+
+    def test_two_funcs(self):
+        calls = []
+        def a(x): calls.append(x)
+        def b(x):
+            calls.append(x * 10)
+            return x * 10
+
+        chained = _utils.chain(a, b)
+        result = chained(5)
+
+        assert calls == [5, 50]
+        assert result == 50
+
+    def test_skips_none_in_middle(self):
+        calls = []
+        def a(x): calls.append('a')
+        def b(x):
+            calls.append('b')
+            return x
+
+        chained = _utils.chain(a, None, b)
+        result = chained(7)
+
+        assert calls == ['a', 'b']
+        assert result == 7
+
+    def test_order_is_preserved(self):
+        order = []
+        def make(name):
+            def fn(*a): order.append(name)
+            return fn
+
+        chained = _utils.chain(make('first'), make('second'), make('third'))
+        chained()
+        assert order == ['first', 'second', 'third']
 
