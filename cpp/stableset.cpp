@@ -1150,7 +1150,7 @@ namespace retracesoftware {
             : &StableFrozenSet_Type;
     }
 
-    static bool StableSet_Check(PyObject * set) {
+    [[maybe_unused]] static bool StableSet_Check(PyObject * set) {
         return PyObject_TypeCheck(set, &StableSet_Type) || PyObject_TypeCheck(set, &StableFrozenSet_Type);
     }
 

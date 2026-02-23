@@ -24,17 +24,6 @@ namespace retracesoftware {
         Py_TYPE(self)->tp_free(self);  // Free the object
     }
 
-    static PyObject* tp_getattro(PyObject * self, PyObject * name) {
-        PyObject * first_try = PyObject_GenericGetAttr(self, name);
-    
-        if (first_try) return first_try;
-    
-        PyErr_Clear();
-
-        return Py_TYPE(Wrapped_Target(self))->tp_getattro(Wrapped_Target(self), name);
-        // return PyObject_GetAttr(Wrapped_Target(self), name);
-    }
-
     //     static PyObject * create(PyTypeObject *type, PyObject *args, PyObject *kwds) {
 
     //     if (PyTuple_GET_SIZE(args) == 0) {
@@ -69,7 +58,6 @@ namespace retracesoftware {
         .tp_basicsize = sizeof(Wrapped),
         .tp_itemsize = 0,
         .tp_dealloc = (destructor)dealloc,
-        // .tp_getattro = tp_getattro,
         .tp_flags = Py_TPFLAGS_DEFAULT |
                     Py_TPFLAGS_HAVE_GC |
                     Py_TPFLAGS_BASETYPE,

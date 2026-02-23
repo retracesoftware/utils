@@ -214,7 +214,7 @@ namespace retracesoftware {
         static PyObject * py_all(IdSet *self, PyObject *args, PyObject *kwds) {
 
             Logical * logical = self->create_logical(args, kwds);
-            if (!test) return nullptr;
+            if (!logical) return nullptr;
             logical->vectorcall = (vectorcallfunc)Logical::all;
             return logical;
         }
@@ -222,7 +222,7 @@ namespace retracesoftware {
         static PyObject * py_any(IdSet *self, PyObject *args, PyObject *kwds) {
 
             Logical * logical = self->create_logical(args, kwds);
-            if (!test) return nullptr;
+            if (!logical) return nullptr;
             logical->vectorcall = (vectorcallfunc)Logical::any;
             return logical;
         }

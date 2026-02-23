@@ -29,31 +29,7 @@ using namespace ankerl::unordered_dense;
 
 #include <stdint.h>
 
-/**
- * Inverse of spread64 - recovers the original input from a spread64 output.
- * Uses modular multiplicative inverses to reverse each transformation step.
- */
-static inline uint64_t unspread64(uint64_t x) {
-    // undo x ^= x >> 31
-    x ^= x >> 31;
-    x ^= x >> 62;
-
-    // undo multiply by 0x94d049bb133111eb (mod 2^64)
-    x *= 0x319642b2d24d8ec3ULL; // modular inverse
-
-    // undo x ^= x >> 27
-    x ^= x >> 27;
-    x ^= x >> 54;
-
-    // undo multiply by 0xbf58476d1ce4e5b9 (mod 2^64)
-    x *= 0x96de1b173f119089ULL; // modular inverse
-
-    // undo x ^= x >> 30
-    x ^= x >> 30;
-    x ^= x >> 60;
-
-    return x;
-}
+// unspread64 (inverse of spread64) removed - not currently used
 
 /**
  * Hash mixing function (splitmix64 finalizer).

@@ -21,11 +21,11 @@ namespace retracesoftware {
             const char *format = "I"; 
 
             // Note: We use static keywords for clearer error messages, though optional here.
-            static char *kwlist[] = {"multiplier", NULL};
+            static const char *kwlist[] = {"multiplier", NULL};
 
             // 2. Parse the arguments
             // PyArg_ParseTupleAndKeywords attempts to extract the arguments from args/kwds
-            if (!PyArg_ParseTupleAndKeywords(args, kwds, format, kwlist, &multiplier)) {
+            if (!PyArg_ParseTupleAndKeywords(args, kwds, format, const_cast<char**>(kwlist), &multiplier)) {
                 // PyArg_ParseTupleAndKeywords sets the exception (e.g., TypeError) upon failure
                 return -1; // Return -1 to signal failure
             }
