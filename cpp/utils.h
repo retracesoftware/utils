@@ -86,6 +86,7 @@ namespace retracesoftware {
     extern PyTypeObject MemoryAddresses_Type;
     extern PyTypeObject Remover_Type;
     extern PyTypeObject Branch_Type;
+    extern PyTypeObject DeallocBridge_Type;
 
     extern PyTypeObject ThreadLocal_Type;
     extern PyTypeObject ThreadLocalContext_Type;

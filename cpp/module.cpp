@@ -638,6 +638,7 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::GatePredicate_Type,
         &retracesoftware::Remover_Type,
         &retracesoftware::Branch_Type,
+        &retracesoftware::DeallocBridge_Type,
         &retracesoftware::ThreadContextWrapper_Type,
         &retracesoftware::ThreadLocalContext_Type,
         nullptr

@@ -2799,22 +2799,14 @@ class TestChain:
 # ---------------------------------------------------------------------------
 # set_on_alloc — alloc / dealloc hook tests
 #
-# set_on_alloc only accepts C base types (not heap types).  It patches
-# tp_alloc on the base and all existing subclasses, and tp_dealloc on
-# the base only.  CPython's subtype_dealloc on heap subtypes naturally
-# chains to the patched base dealloc.
+# set_on_alloc patches tp_alloc on the given type and all existing
+# subclasses, and tp_dealloc on the given type.  CPython's
+# subtype_dealloc on heap subtypes naturally walks tp_base until it
+# finds the patched dealloc trampoline.
 # ---------------------------------------------------------------------------
 
 
 class TestSetOnAlloc:
-
-    def test_rejects_heap_type(self):
-        """set_on_alloc raises TypeError for heap types."""
-        class Foo:
-            pass
-
-        with pytest.raises(TypeError, match="C base type"):
-            _utils.set_on_alloc(Foo, lambda obj: None)
 
     def test_alloc_callback_fires_on_c_type(self):
         """set_on_alloc callback runs when a C type instance is created."""
