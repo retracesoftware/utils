@@ -2905,3 +2905,21 @@ class TestSetOnAlloc:
         del b
         assert id_b in freed
 
+    def test_dealloc_with_pending_exception(self):
+        """Dealloc callback must not interfere with a pending exception.
+
+        When a C function internally creates and destroys a patched object
+        on its error path (e.g. _io.open failing with FileNotFoundError),
+        the object is freed while the exception is still set on the thread
+        state.  generic_dealloc must save/restore the pending exception
+        around the PyObject_CallNoArgs callback, otherwise a C callable
+        (like Remover) returning non-NULL triggers a fatal abort on debug
+        builds: 'a function returned a result with an exception set'.
+        """
+        import _io
+        addrs = _utils.MemoryAddresses()
+        _utils.set_on_alloc(_io.FileIO, lambda obj: addrs.add(obj))
+
+        with pytest.raises(FileNotFoundError):
+            _io.open("/nonexistent/path/file.txt", "rb")
+

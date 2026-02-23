@@ -58,11 +58,16 @@ namespace retracesoftware {
             PyObject * cb = it->second;
             dealloc_callbacks.erase(it);
 
+            PyObject *exc_type, *exc_value, *exc_tb;
+            PyErr_Fetch(&exc_type, &exc_value, &exc_tb);
+
             Py_SET_REFCNT(obj, 1);
             PyObject * r = PyObject_CallNoArgs(cb);
             Py_XDECREF(r);
             Py_DECREF(cb);
             if (!r) PyErr_Clear();
+
+            PyErr_Restore(exc_type, exc_value, exc_tb);
 
             if (Py_REFCNT(obj) > 1) {
                 Py_SET_REFCNT(obj, Py_REFCNT(obj) - 1);
