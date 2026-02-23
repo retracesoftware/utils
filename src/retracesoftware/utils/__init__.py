@@ -4,6 +4,7 @@ retracesoftware.utils - Runtime selectable release/debug builds
 Set RETRACE_DEBUG=1 to use the debug build with symbols and assertions.
 """
 import os
+import warnings
 import weakref
 import threading
 from collections import UserDict
@@ -37,14 +38,36 @@ except Exception:
 DEBUG_MODE = _DEBUG_MODE and __backend__.startswith("native")
 
 
+_DEPRECATED = frozenset({
+    "MemoryAddresses", "Proxy", "ThreadStatePredicate",
+    "blocking_counter", "chain", "fastset", "has_generic_alloc",
+    "has_generic_new", "hashseed", "id_dict", "idset", "instancecheck",
+    "intercept__new__", "intercept_dict_set", "is_identity_hash",
+    "is_immutable", "marker", "method_dispatch", "perthread", "reference",
+    "return_none", "set_type", "start_new_thread_wrapper",
+    "thread_switch_monitor", "unwrap_apply", "visitor",
+    "yields_weakly_referenceable_instances",
+})
+
+_deprecated_local: dict = {}
+
+
 def __getattr__(name: str) -> Any:
+    if name in _DEPRECATED:
+        warnings.warn(
+            f"retracesoftware.utils.{name} is deprecated and will be removed in a future release",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if name in _deprecated_local:
+            return _deprecated_local[name]
     return getattr(_backend_mod, name)
 
 
 def _export_public(mod: ModuleType) -> None:
     g = globals()
     for k, v in mod.__dict__.items():
-        if k.startswith("_"):
+        if k.startswith("_") or k in _DEPRECATED:
             continue
         g[k] = v
 
@@ -120,10 +143,10 @@ def add_thread_middleware(factory):
 
     return remove
 
-def return_none(func):
+def _return_none(func):
     return functional.sequence(func, functional.constantly(None))
 
-def chain(*funcs):
+def _chain(*funcs):
     funcs = [f for f in funcs if f is not None]
     if not funcs:
         return None
@@ -131,7 +154,10 @@ def chain(*funcs):
     if len(funcs) == 1:
         return funcs[0]
     else:
-        funcs = [return_none(func) for func in funcs[:-1]] + [funcs[-1]]
+        funcs = [_return_none(func) for func in funcs[:-1]] + [funcs[-1]]
         return functional.firstof(*funcs)
+
+_deprecated_local["return_none"] = _return_none
+_deprecated_local["chain"] = _chain
 
 __all__ = sorted([k for k in globals().keys() if not k.startswith("_")])

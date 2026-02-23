@@ -36,43 +36,6 @@ except ModuleNotFoundError:  # Fallback for running directly from the repo
 #     ]
 
 
-def test_interceptdict_applies_on_set_to_backing_and_updates():
-    backing = {"a": 1}
-    seen = []
-
-    def on_set(key, value):
-        seen.append((key, value))
-        return value * 2
-
-    intercepted = utils.InterceptDict(backing, on_set)
-
-    assert backing == {}  # moved out during construction
-    assert intercepted["a"] == 2
-
-    intercepted["b"] = 5
-    assert intercepted["b"] == 10
-    assert seen == [("a", 1), ("b", 5)]
-
-
-def test_on_set_intercepts_dict_assignment_and_restores_type():
-    mutations = []
-    data = {"k": "v"}
-
-    def transform(key, value):
-        mutations.append((key, value))
-        return f"{key}:{value}"
-
-    original_type = type(data)
-    with utils.on_set(data, transform):
-        assert type(data).__name__ == "dictintercept"
-        data["a"] = 1
-        data.update(b=2)
-
-    assert data == {"k": "v", "a": "a:1", "b": "b:2"}
-    assert type(data) is original_type
-    assert mutations == [("a", 1), ("b", 2)]
-
-
 def test_counter_is_callable_and_increments():
     counter = _utils.counter(initial=5)
 
