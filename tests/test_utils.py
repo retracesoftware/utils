@@ -2795,3 +2795,177 @@ class TestChain:
         chained()
         assert order == ['first', 'second', 'third']
 
+
+# ---------------------------------------------------------------------------
+# set_on_alloc — alloc / dealloc hook tests
+#
+# These tests exercise the generic_dealloc trampoline in onalloc.cpp,
+# specifically the interaction with CPython's subtype_dealloc when
+# set_on_alloc is called on both a base type and its subtypes.
+#
+# Without the re-entry and double-Py_DECREF guards in generic_dealloc,
+# the "subtype" and "heap hierarchy" tests below crash with SIGABRT
+# (negative type refcount) on debug builds.
+# ---------------------------------------------------------------------------
+
+class TestSetOnAlloc:
+
+    def test_alloc_callback_fires_on_base_type(self):
+        """set_on_alloc callback runs when an instance is created."""
+        created = []
+
+        class Base:
+            pass
+
+        _utils.set_on_alloc(Base, lambda obj: created.append(type(obj).__name__))
+        b = Base()
+        assert created == ["Base"]
+
+    def test_alloc_callback_fires_on_subtype(self):
+        """Callback registered on a base fires for subtype instances too."""
+        created = []
+
+        class Base:
+            pass
+
+        _utils.set_on_alloc(Base, lambda obj: created.append(type(obj).__name__))
+
+        class Sub(Base):
+            pass
+
+        _utils.set_on_alloc(Sub, lambda obj: created.append(type(obj).__name__))
+
+        s = Sub()
+        assert "Sub" in created
+
+    def test_dealloc_callback_fires(self):
+        """If the alloc callback returns a callable, it runs at dealloc time."""
+        freed = []
+
+        class Base:
+            pass
+
+        def on_alloc(obj):
+            return lambda: freed.append("freed")
+
+        _utils.set_on_alloc(Base, on_alloc)
+
+        b = Base()
+        assert freed == []
+        del b
+        assert freed == ["freed"]
+
+    def test_subtype_dealloc_no_crash(self):
+        """Subtype instances whose base was patched can be freed safely.
+
+        Regression: generic_dealloc used Py_TYPE(obj) on re-entry from
+        subtype_dealloc, causing it to re-invoke subtype_dealloc and
+        double-decref the type — crashing on debug builds with
+        'object has negative ref count'.
+        """
+        allocs = []
+
+        class Base:
+            pass
+
+        _utils.set_on_alloc(Base, lambda obj: allocs.append(type(obj).__name__))
+
+        class Sub(Base):
+            pass
+
+        _utils.set_on_alloc(Sub, lambda obj: allocs.append(type(obj).__name__))
+
+        s = Sub()
+        assert "Sub" in allocs
+        del s  # must not crash
+
+    def test_heap_hierarchy_dealloc_no_double_decref(self):
+        """Two-level heap-type hierarchy: dealloc must not corrupt type refcount.
+
+        Regression: when both Base and Sub are heap types (both use
+        subtype_dealloc), the old generic_dealloc would call
+        subtype_dealloc twice per object destruction, each doing
+        Py_DECREF(type), driving the type's refcount negative.
+        """
+        freed = []
+
+        class Base:
+            pass
+
+        def on_alloc(obj):
+            name = type(obj).__name__
+            return lambda: freed.append(f"freed-{name}")
+
+        _utils.set_on_alloc(Base, on_alloc)
+
+        class Sub(Base):
+            pass
+
+        _utils.set_on_alloc(Sub, on_alloc)
+
+        objs = [Sub() for _ in range(5)]
+        assert len(freed) == 0
+        del objs
+        assert len(freed) == 5
+        assert all(f == "freed-Sub" for f in freed)
+
+    def test_three_level_hierarchy(self):
+        """Three levels of heap types all with set_on_alloc survive dealloc."""
+        log = []
+
+        class A:
+            pass
+
+        class B(A):
+            pass
+
+        class C(B):
+            pass
+
+        def on_alloc(obj):
+            name = type(obj).__name__
+            log.append(("alloc", name))
+            return lambda: log.append(("free", name))
+
+        _utils.set_on_alloc(A, on_alloc)
+        _utils.set_on_alloc(B, on_alloc)
+        _utils.set_on_alloc(C, on_alloc)
+
+        c = C()
+        assert ("alloc", "C") in log
+        log.clear()
+        del c
+        assert ("free", "C") in log
+
+    def test_alloc_callback_returning_none_skips_dealloc(self):
+        """Returning None from the alloc callback means no dealloc hook."""
+        freed = []
+
+        class Base:
+            pass
+
+        _utils.set_on_alloc(Base, lambda obj: None)
+        b = Base()
+        del b  # must not crash — no dealloc callback to run
+
+    def test_multiple_instances_independent(self):
+        """Each instance gets its own dealloc callback."""
+        freed = []
+
+        class Base:
+            pass
+
+        def on_alloc(obj):
+            oid = id(obj)
+            return lambda: freed.append(oid)
+
+        _utils.set_on_alloc(Base, on_alloc)
+
+        a, b = Base(), Base()
+        id_a, id_b = id(a), id(b)
+        del a
+        assert id_a in freed
+        assert id_b not in freed
+        del b
+        assert id_b in freed
+
