@@ -2947,6 +2947,9 @@ class TestSetOnAlloc:
         del s
         assert freed == ["freed"]
 
+    @pytest.mark.skipif(
+        not hasattr(__import__('select'), 'kevent'),
+        reason="select.kevent only available on BSD/macOS (kqueue)")
     def test_dealloc_callback_non_weakref_heap_type(self):
         """Dealloc callback fires for non-weakref heap types (select.kevent)."""
         import select
