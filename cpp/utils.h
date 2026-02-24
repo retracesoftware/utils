@@ -82,6 +82,7 @@ namespace retracesoftware {
     extern PyTypeObject GateContext_Type;
     extern PyTypeObject ApplyWith_Type;
     extern PyTypeObject GatePredicate_Type;
+    extern PyTypeObject CacheSentinel_Type;
 
     extern PyTypeObject MemoryAddresses_Type;
     extern PyTypeObject Remover_Type;

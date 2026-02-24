@@ -9,6 +9,7 @@ namespace retracesoftware {
     static map<PyTypeObject *, allocfunc> allocfuncs;
     static map<PyTypeObject *, destructor> deallocfuncs;
     static map<PyObject *, PyObject *> dealloc_callbacks;
+    static map<PyTypeObject *, PyObject *> alloc_callbacks;
 
     // ── DeallocBridge ────────────────────────────────────────────
     // Minimal callable that wraps a no-arg dealloc callback for use
@@ -61,26 +62,25 @@ namespace retracesoftware {
 
     // ── helpers ──────────────────────────────────────────────────
 
-    static PyObject * key() {
-        static PyObject * name = nullptr;
-        if (!name) name = PyUnicode_InternFromString("__retrace_on_alloc__");
-        return name;
-    }
-
     static PyObject * find_callback(PyTypeObject * cls) {
         while (cls) {
-            PyObject * callback = PyDict_GetItem(cls->tp_dict, key());
-            if (callback) return callback;
+            auto it = alloc_callbacks.find(cls);
+            if (it != alloc_callbacks.end()) return it->second;
             cls = cls->tp_base;
         }
         return nullptr;
     }
 
+    static thread_local bool in_callback = false;
+
     static bool call_callback(PyObject * allocated) {
+        if (in_callback || _Py_IsFinalizing()) return true;
         PyObject * callback = find_callback(Py_TYPE(allocated));
         if (!callback) return true;
 
+        in_callback = true;
         PyObject * result = PyObject_CallOneArg(callback, allocated);
+        in_callback = false;
         if (!result) return false;
 
         if (result == Py_None) {
@@ -90,12 +90,13 @@ namespace retracesoftware {
 
         if (PyCallable_Check(result)) {
             PyTypeObject *tp = Py_TYPE(allocated);
-            if (tp->tp_weaklistoffset) {
+            if ((tp->tp_flags & Py_TPFLAGS_HEAPTYPE) && tp->tp_weaklistoffset) {
                 PyObject *bridge = create_dealloc_bridge(result);
                 Py_DECREF(result);
                 if (!bridge) return false;
-                PyWeakref_NewRef(allocated, bridge);
+                PyObject *wr = PyWeakref_NewRef(allocated, bridge);
                 Py_DECREF(bridge);
+                if (!wr) return false;
             } else {
                 dealloc_callbacks[allocated] = result;
             }
@@ -134,7 +135,7 @@ namespace retracesoftware {
     // ── generic_dealloc (fallback for non-weakref C types) ───────
 
     static void generic_dealloc(PyObject * obj) {
-        PyObject * cb = take_dealloc_callback(obj);
+        PyObject * cb = _Py_IsFinalizing() ? nullptr : take_dealloc_callback(obj);
 
         PyTypeObject * type = Py_TYPE(obj);
         while (type && type->tp_dealloc != generic_dealloc)
@@ -277,13 +278,22 @@ namespace retracesoftware {
                 "set_on_alloc cannot patch the root object type");
             return false;
         }
+        if (alloc_callbacks.find(type) != alloc_callbacks.end()) {
+            PyErr_Format(PyExc_RuntimeError,
+                "set_on_alloc: type '%.200s' is already patched; "
+                "each type may only be patched once per process",
+                type->tp_name);
+            return false;
+        }
         if (!is_alloc_patched(type->tp_alloc))
             patch_alloc(type);
         patch_alloc_subclasses(type);
 
-        if (!type->tp_weaklistoffset)
+        if (!((type->tp_flags & Py_TPFLAGS_HEAPTYPE) && type->tp_weaklistoffset))
             patch_dealloc(type);
 
-        return PyDict_SetItem(type->tp_dict, key(), callback) == 0;
+        Py_INCREF(callback);
+        alloc_callbacks[type] = callback;
+        return true;
     }
 }

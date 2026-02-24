@@ -2819,10 +2819,10 @@ class TestSetOnAlloc:
         """Callback registered on a C base fires for heap subtype instances."""
         created = []
 
-        class MyError(Exception):
+        class MyError(ValueError):
             pass
 
-        _utils.set_on_alloc(Exception, lambda obj: created.append(type(obj).__name__))
+        _utils.set_on_alloc(ValueError, lambda obj: created.append(type(obj).__name__))
         e = MyError("test")
         assert "MyError" in created
 
@@ -2833,8 +2833,8 @@ class TestSetOnAlloc:
         def on_alloc(obj):
             return lambda: freed.append("freed")
 
-        _utils.set_on_alloc(Exception, on_alloc)
-        e = Exception("test")
+        _utils.set_on_alloc(TypeError, on_alloc)
+        e = TypeError("test")
         assert freed == []
         del e
         assert freed == ["freed"]
@@ -2843,10 +2843,10 @@ class TestSetOnAlloc:
         """Heap subtype instances whose C base was patched can be freed safely."""
         allocs = []
 
-        class MyError(Exception):
+        class MyError(RuntimeError):
             pass
 
-        _utils.set_on_alloc(Exception, lambda obj: allocs.append(type(obj).__name__))
+        _utils.set_on_alloc(RuntimeError, lambda obj: allocs.append(type(obj).__name__))
         e = MyError("test")
         assert "MyError" in allocs
         del e  # must not crash
@@ -2855,7 +2855,7 @@ class TestSetOnAlloc:
         """Multi-level heap subtype hierarchy deallocs safely."""
         freed = []
 
-        class ErrorA(Exception):
+        class ErrorA(ArithmeticError):
             pass
 
         class ErrorB(ErrorA):
@@ -2865,7 +2865,7 @@ class TestSetOnAlloc:
             name = type(obj).__name__
             return lambda: freed.append(f"freed-{name}")
 
-        _utils.set_on_alloc(Exception, on_alloc)
+        _utils.set_on_alloc(ArithmeticError, on_alloc)
 
         objs = [ErrorB("test") for _ in range(5)]
         assert len(freed) == 0
@@ -2875,8 +2875,8 @@ class TestSetOnAlloc:
 
     def test_alloc_callback_returning_none_skips_dealloc(self):
         """Returning None from the alloc callback means no dealloc hook."""
-        _utils.set_on_alloc(Exception, lambda obj: None)
-        e = Exception("test")
+        _utils.set_on_alloc(AttributeError, lambda obj: None)
+        e = AttributeError("test")
         del e  # must not crash — no dealloc callback to run
 
     def test_multiple_instances_independent(self):
@@ -2887,9 +2887,9 @@ class TestSetOnAlloc:
             oid = id(obj)
             return lambda: freed.append(oid)
 
-        _utils.set_on_alloc(Exception, on_alloc)
+        _utils.set_on_alloc(ImportError, on_alloc)
 
-        a, b = Exception("a"), Exception("b")
+        a, b = ImportError("a"), ImportError("b")
         id_a, id_b = id(a), id(b)
         del a
         assert id_a in freed
@@ -2914,4 +2914,50 @@ class TestSetOnAlloc:
 
         with pytest.raises(FileNotFoundError):
             _io.open("/nonexistent/path/file.txt", "rb")
+
+    def test_dealloc_callback_weakref_path(self):
+        """Dealloc callback fires via weakref for heap types."""
+        freed = []
+
+        class MyError(KeyError):
+            pass
+
+        def on_alloc(obj):
+            name = type(obj).__name__
+            return lambda: freed.append(f"freed-{name}")
+
+        _utils.set_on_alloc(KeyError, on_alloc)
+        e = MyError("test")
+        assert freed == []
+        del e
+        assert freed == ["freed-MyError"]
+
+    def test_dealloc_callback_non_weakref_c_type(self):
+        """Dealloc callback fires for non-weakref C types (_socket.socket)."""
+        import _socket
+        freed = []
+
+        def on_alloc(obj):
+            return lambda: freed.append("freed")
+
+        _utils.set_on_alloc(_socket.socket, on_alloc)
+        s = _socket.socket()
+        assert freed == []
+        s.close()
+        del s
+        assert freed == ["freed"]
+
+    def test_dealloc_callback_non_weakref_heap_type(self):
+        """Dealloc callback fires for non-weakref heap types (select.kevent)."""
+        import select
+        freed = []
+
+        def on_alloc(obj):
+            return lambda: freed.append("freed")
+
+        _utils.set_on_alloc(select.kevent, on_alloc)
+        ev = select.kevent(1)
+        assert freed == []
+        del ev
+        assert freed == ["freed"]
 

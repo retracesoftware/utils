@@ -9,12 +9,14 @@ namespace retracesoftware {
     struct GateContext;
     struct ApplyWith;
     struct GatePredicate;
+    struct CacheSentinel;
 
     extern PyTypeObject Gate_Type;
     extern PyTypeObject BoundGate_Type;
     extern PyTypeObject GateContext_Type;
     extern PyTypeObject ApplyWith_Type;
     extern PyTypeObject GatePredicate_Type;
+    extern PyTypeObject CacheSentinel_Type;
 
     // ========================================================================
     // Gate — a single object with a thread-local executor slot.
@@ -28,77 +30,126 @@ namespace retracesoftware {
     // Fast path: a plain global cache (not thread_local). With the GIL,
     // only one thread runs at a time, so a global cache is coherent
     // without synchronization. Thread switches are detected by comparing
-    // PyThreadState_Get() against the cached thread state — a cheap
-    // pointer comparison. With a single global Gate, the typical hot path
-    // is two pointer comparisons + one null check + one indirect call. No TLS access at all.
+    // PyThreadState_GetDict() against the cached dict pointer — a cheap
+    // pointer comparison. The cache owns a strong reference to the
+    // executor, avoiding dict operations on the hot path entirely.
+    //
+    // A CacheSentinel object in each thread's dict invalidates the cache
+    // when the thread exits, preventing stale-pointer access.
     // ========================================================================
 
     struct GateCache {
-        PyThreadState * tstate;  // thread that populated this cache
+        PyObject * dict;         // borrowed ref to thread dict (identity key)
         Gate * gate;             // gate this cache is for
-        FastCall executor;       // cached executor (callable == NULL ⇒ disabled)
+        FastCall executor;       // cached executor (callable == NULL => disabled)
     };
 
-    // Plain global — no thread_local, no TLS overhead.
-    // Safe because only one thread runs at a time under the GIL.
     static GateCache cache = {nullptr, nullptr, {}};
+
+    // Private key for the sentinel in each thread dict.
+    static PyObject * sentinel_key = nullptr;
+
+    struct CacheSentinel : public PyObject {
+        PyObject * dict;
+
+        static void dealloc(CacheSentinel * self) {
+            if (cache.dict == self->dict) {
+                cache = {nullptr, nullptr, {}};
+            }
+            Py_TYPE(self)->tp_free((PyObject *)self);
+        }
+    };
 
     struct Gate : public PyObject {
         vectorcallfunc vectorcall;
         PyObject * default_executor;  // used when thread dict has no entry; NULL = disabled
 
-        // Slow path: load this gate's executor from the current thread's dict
-        // into the global cache. Marked noinline to keep the hot path tight.
-        // When no dict entry exists, falls back to default_executor.
+        static void ensure_sentinel(PyObject * dict) {
+            if (!sentinel_key) {
+                sentinel_key = PyUnicode_InternFromString("__retrace_gate_sentinel__");
+                if (!sentinel_key) { PyErr_Clear(); return; }
+            }
+            PyObject * existing = PyDict_GetItem(dict, sentinel_key);
+            if (existing) return;
+
+            CacheSentinel * s = (CacheSentinel *)CacheSentinel_Type.tp_alloc(&CacheSentinel_Type, 0);
+            if (!s) { PyErr_Clear(); return; }
+            s->dict = dict;
+            if (PyDict_SetItem(dict, sentinel_key, (PyObject *)s) < 0) {
+                Py_DECREF(s);
+                PyErr_Clear();
+                return;
+            }
+            Py_DECREF(s);
+        }
+
+        // Write cached executor back to cache.dict (which may belong to
+        // another thread — safe under the GIL). Called on cache eviction
+        // or Gate::dealloc (cold path only).
         __attribute__((noinline))
-        void load_cache(PyThreadState * tstate) {
-            PyObject * dict = PyThreadState_GetDict();
+        static void flush_to_dict() {
+            if (!cache.dict || !cache.gate) return;
+
+            PyObject * dict = cache.dict;
+            Gate * gate = cache.gate;
+            PyObject * exec = cache.executor.callable;
+
+            if (exec) {
+                PyDict_SetItem(dict, (PyObject *)gate, exec);
+            } else if (!gate->default_executor) {
+                PyDict_SetItem(dict, (PyObject *)gate, Py_None);
+            } else {
+                PyObject *err_type, *err_value, *err_tb;
+                PyErr_Fetch(&err_type, &err_value, &err_tb);
+                if (PyDict_DelItem(dict, (PyObject *)gate) < 0)
+                    PyErr_Clear();
+                if (err_type)
+                    PyErr_Restore(err_type, err_value, err_tb);
+            }
+        }
+
+        // Slow path: flush old cache, install sentinel, load from new dict.
+        __attribute__((noinline))
+        void load_cache(PyObject * dict) {
+            flush_to_dict();
+
+            Py_XDECREF(cache.executor.callable);
+
+            ensure_sentinel(dict);
+
             PyObject * exec = PyDict_GetItem(dict, (PyObject *)this);  // borrowed ref
+            if (exec == Py_None) exec = nullptr;
             if (!exec && this->default_executor) {
                 exec = this->default_executor;
             }
-            cache.tstate = tstate;
+
+            Py_XINCREF(exec);
+            cache.dict = dict;   // borrowed
             cache.gate = this;
             cache.executor = exec ? FastCall(exec) : FastCall();
         }
 
-        // Get the current thread's executor (borrowed reference, may be NULL).
-        // Hot path: two pointer comparisons against the global cache.
         inline PyObject * executor() {
-            PyThreadState * tstate = PyThreadState_Get();
-            if (__builtin_expect(cache.tstate != tstate || cache.gate != this, 0)) {
-                load_cache(tstate);
+            PyObject * dict = PyThreadState_GetDict();
+            if (__builtin_expect(cache.dict != dict || cache.gate != this, 0)) {
+                load_cache(dict);
             }
             return cache.executor.callable;
         }
 
+        // Hot path: INCREF/DECREF + assign — zero dict operations.
         void set_executor(PyObject * exec) {
-            PyThreadState * tstate = PyThreadState_Get();
             PyObject * dict = PyThreadState_GetDict();
-
-            if (exec) {
-                PyDict_SetItem(dict, (PyObject *)this, exec);
-                cache.executor = FastCall(exec);
-            } else {
-                // Save any in-flight exception so PyDict_DelItem's
-                // KeyError suppression doesn't swallow it.
-                PyObject *err_type, *err_value, *err_tb;
-                PyErr_Fetch(&err_type, &err_value, &err_tb);
-
-                if (PyDict_DelItem(dict, (PyObject *)this) < 0) {
-                    PyErr_Clear();
-                }
-
-                if (err_type) {
-                    PyErr_Restore(err_type, err_value, err_tb);
-                }
-
-                cache.executor = this->default_executor ? FastCall(this->default_executor) : FastCall();
+            if (__builtin_expect(cache.dict != dict || cache.gate != this, 0)) {
+                load_cache(dict);
             }
 
-            // Update cache identity
-            cache.tstate = tstate;
-            cache.gate = this;
+            if (!exec && this->default_executor)
+                exec = this->default_executor;
+
+            Py_XINCREF(exec);
+            Py_XDECREF(cache.executor.callable);
+            cache.executor = exec ? FastCall(exec) : FastCall();
         }
 
         // --- Python methods ---
@@ -182,8 +233,8 @@ namespace retracesoftware {
         }
 
         static void dealloc(Gate * self) {
-            // Invalidate global cache if it references this gate
             if (cache.gate == self) {
+                Py_XDECREF(cache.executor.callable);
                 cache = {nullptr, nullptr, {}};
             }
             Py_CLEAR(self->default_executor);
@@ -195,8 +246,8 @@ namespace retracesoftware {
     // BoundGate — thin wrapper returned by gate.bind(target).
     //
     // Hot path (disabled, single global Gate, same thread):
-    //   1. PyThreadState_Get()          — read a global CPython maintains
-    //   2. cache.tstate == tstate?      — pointer compare (almost always true)
+    //   1. PyThreadState_GetDict()      — read current thread's dict pointer
+    //   2. cache.dict == dict?          — pointer compare (almost always true)
     //   3. cache.gate == gate?          — pointer compare (always true for single gate)
     //   4. cache.executor.callable?     — NULL check
     //   5. self->target.vectorcall(...) — indirect call via cached pointer
@@ -216,11 +267,10 @@ namespace retracesoftware {
 
         static PyObject * call(BoundGate * self, PyObject ** args, size_t nargsf, PyObject * kwnames) {
             Gate * gate = self->gate;
-            PyThreadState * tstate = PyThreadState_Get();
+            PyObject * dict = PyThreadState_GetDict();
 
-            // Cache check: almost always a hit with a single global Gate
-            if (__builtin_expect(cache.tstate != tstate || cache.gate != gate, 0)) {
-                gate->load_cache(tstate);
+            if (__builtin_expect(cache.dict != dict || cache.gate != gate, 0)) {
+                gate->load_cache(dict);
             }
 
             if (cache.executor.callable == nullptr) {
@@ -696,4 +746,12 @@ namespace retracesoftware {
 
         return (PyObject *)aw;
     }
+
+    PyTypeObject CacheSentinel_Type = {
+        .ob_base = PyVarObject_HEAD_INIT(NULL, 0)
+        .tp_name = MODULE "CacheSentinel",
+        .tp_basicsize = sizeof(CacheSentinel),
+        .tp_dealloc = (destructor)CacheSentinel::dealloc,
+        .tp_flags = Py_TPFLAGS_DEFAULT | Py_TPFLAGS_DISALLOW_INSTANTIATION,
+    };
 }
