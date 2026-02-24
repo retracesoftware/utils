@@ -44,7 +44,7 @@ namespace retracesoftware {
     }
 
     PyTypeObject DeallocBridge_Type = {
-        PyVarObject_HEAD_INIT(NULL, 0)
+        .ob_base = PyVarObject_HEAD_INIT(NULL, 0),
         .tp_name = "_retracesoftware_utils.DeallocBridge",
         .tp_basicsize = sizeof(DeallocBridge),
         .tp_dealloc = (destructor)DeallocBridge_dealloc,
