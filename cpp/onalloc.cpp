@@ -273,6 +273,9 @@ namespace retracesoftware {
     }
 
     bool set_on_alloc(PyTypeObject *type, PyObject * callback) {
+        assert(type);
+        assert(callback);
+        
         if (type->tp_base == NULL) {
             PyErr_Format(PyExc_TypeError,
                 "set_on_alloc cannot patch the root object type");
