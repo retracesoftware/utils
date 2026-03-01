@@ -656,6 +656,7 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::ThreadState_Type,
 
         &retracesoftware::Demultiplexer_Type,
+        &retracesoftware::Dispatcher_Type,
         &retracesoftware::ThreadStatePredicate_Type,
         &retracesoftware::StripTraceback_Type,
 
@@ -683,7 +684,7 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::Gate_Type,
         &retracesoftware::MemoryAddresses_Type,
         &retracesoftware::ThreadLocal_Type,
-        NULL
+            NULL
     };
 
     for (int i = 0; hidden_types[i]; i++) {

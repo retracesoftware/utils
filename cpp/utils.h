@@ -39,6 +39,7 @@ namespace retracesoftware {
     extern PyTypeObject ThreadStateWrapped_Type;
 
     extern PyTypeObject Demultiplexer_Type;
+    extern PyTypeObject Dispatcher_Type;
     extern PyTypeObject ThreadStatePredicate_Type;
     extern PyTypeObject StripTraceback_Type;
 
