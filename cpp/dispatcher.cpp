@@ -2,8 +2,29 @@
 
 #include <structmember.h>
 #include <atomic>
+#include <thread>
 
 namespace retracesoftware {
+
+template <typename T>
+static inline void atomic_wait_compat(std::atomic<T> &value, T expected) {
+#if defined(__cpp_lib_atomic_wait) && __cpp_lib_atomic_wait >= 201907L
+    value.wait(expected);
+#else
+    while (value.load(std::memory_order_acquire) == expected) {
+        std::this_thread::yield();
+    }
+#endif
+}
+
+template <typename T>
+static inline void atomic_notify_all_compat(std::atomic<T> &value) {
+#if defined(__cpp_lib_atomic_wait) && __cpp_lib_atomic_wait >= 201907L
+    value.notify_all();
+#else
+    (void)value;
+#endif
+}
 
 static inline int count_interpreter_tstates() {
     PyInterpreterState *interp = PyInterpreterState_Get();
@@ -62,22 +83,22 @@ struct Dispatcher : public PyObject {
                 Py_XDECREF(result);
                 if (!result) return nullptr;
                 Py_BEGIN_ALLOW_THREADS
-                buffered.wait(next);
+                atomic_wait_compat(buffered, next);
                 Py_END_ALLOW_THREADS
             } else if (next == LOADING) {
                 Py_BEGIN_ALLOW_THREADS
-                buffered.wait(LOADING);
+                atomic_wait_compat(buffered, LOADING);
                 Py_END_ALLOW_THREADS
             } else {
                 buffered.store(LOADING, std::memory_order_release);
                 next = PyObject_CallNoArgs(source);
                 if (!next) {
                     buffered.store(nullptr, std::memory_order_release);
-                    buffered.notify_all();
+                    atomic_notify_all_compat(buffered);
                     return nullptr;
                 }
                 buffered.store(next, std::memory_order_release);
-                buffered.notify_all();
+                atomic_notify_all_compat(buffered);
                 return next;
             }
         }
@@ -106,16 +127,16 @@ struct Dispatcher : public PyObject {
 
             if (truthy) {
                 PyObject *taken = self->buffered.exchange(nullptr, std::memory_order_acq_rel);
-                self->buffered.notify_all();
+                atomic_notify_all_compat(self->buffered);
                 if (taken) return taken;
             } else if (self->num_waiting_threads.load(std::memory_order_acquire) < count_interpreter_tstates() - 1) {
                 self->num_waiting_threads.fetch_add(1, std::memory_order_release);
-                self->num_waiting_threads.notify_all();
+                atomic_notify_all_compat(self->num_waiting_threads);
                 Py_BEGIN_ALLOW_THREADS
-                self->buffered.wait(next);
+                atomic_wait_compat(self->buffered, next);
                 Py_END_ALLOW_THREADS
                 self->num_waiting_threads.fetch_sub(1, std::memory_order_release);
-                self->num_waiting_threads.notify_all();
+                atomic_notify_all_compat(self->num_waiting_threads);
             } else {
                 PyErr_SetString(PyExc_RuntimeError, "Dispatcher: too many threads waiting for item");
                 return nullptr;
@@ -135,7 +156,7 @@ struct Dispatcher : public PyObject {
         while (self->num_waiting_threads.load(std::memory_order_acquire) < target) {
             int current = self->num_waiting_threads.load(std::memory_order_acquire);
             Py_BEGIN_ALLOW_THREADS
-            self->num_waiting_threads.wait(current);
+            atomic_wait_compat(self->num_waiting_threads, current);
             Py_END_ALLOW_THREADS
         }
         Py_RETURN_NONE;
@@ -156,19 +177,19 @@ struct Dispatcher : public PyObject {
 
         while (self->buffered.load() == LOADING) {
             Py_BEGIN_ALLOW_THREADS
-            self->buffered.wait(LOADING);
+            atomic_wait_compat(self->buffered, LOADING);
             Py_END_ALLOW_THREADS
         }
 
         PyObject *saved = self->buffered.load(std::memory_order_acquire);
         PyObject *tagged = (PyObject *)((uintptr_t)on_waiting | 1);
         self->buffered.store(tagged, std::memory_order_release);
-        self->buffered.notify_all();
+        atomic_notify_all_compat(self->buffered);
 
         PyObject *result = PyObject_CallNoArgs(while_interrupted);
 
         self->buffered.store(saved, std::memory_order_release);
-        self->buffered.notify_all();
+        atomic_notify_all_compat(self->buffered);
 
         if (!result) return nullptr;
         return result;
