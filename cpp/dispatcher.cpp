@@ -1,7 +1,4 @@
-#define Py_BUILD_CORE_MODULE
-
 #include "utils.h"
-#include "internal/pycore_interp.h"
 
 #include <structmember.h>
 #include <atomic>
@@ -11,7 +8,9 @@ namespace retracesoftware {
 static inline int count_interpreter_tstates() {
     PyInterpreterState *interp = PyInterpreterState_Get();
     int count = 0;
-    for (PyThreadState *ts = interp->threads.head; ts; ts = ts->next)
+    for (PyThreadState *ts = PyInterpreterState_ThreadHead(interp);
+         ts != NULL;
+         ts = PyThreadState_Next(ts))
         count++;
     return count;
 }
