@@ -1,5 +1,7 @@
 #include "utils.h"
 #include <signal.h>
+#include <dlfcn.h>
+#include <stdatomic.h>
 #include "unordered_dense.h"
 #include <internal/pycore_frame.h>
 
@@ -510,6 +512,70 @@ static PyObject * intercept_dict_set(PyObject * module, PyObject * args, PyObjec
 //     return gen == -1 ? Py_NewRef(Py_None) : PyLong_FromLong(gen);
 // }
 
+// gilwatch — activates the preloaded mutex interposer for GIL switch detection.
+// Defined in gilwatch_activate.c (needs Py_BUILD_CORE for _PyRuntime access).
+extern "C" pthread_mutex_t * gilwatch_get_gil_mutex(void);
+
+static PyObject * gilwatch_python_callback = nullptr;
+
+static int gilwatch_pending_call(void * arg) {
+    (void)arg;
+    PyObject * cb = gilwatch_python_callback;
+    if (!cb) return 0;
+    PyObject * result = PyObject_CallNoArgs(cb);
+    if (!result) { PyErr_Clear(); return 0; }
+    Py_DECREF(result);
+    return 0;
+}
+
+static void gilwatch_trampoline(pthread_t previous, pthread_t current) {
+    // Safe to call from inside pthread_mutex_lock — Py_AddPendingCall
+    // is async-signal-safe and doesn't require the GIL.
+    Py_AddPendingCall(gilwatch_pending_call, nullptr);
+}
+
+static PyObject * gilwatch_activate(PyObject * self, PyObject * callback) {
+    if (callback == Py_None) {
+        auto * addr = (_Atomic uintptr_t *)dlsym(RTLD_DEFAULT, "gilwatch_mutex_address");
+        if (addr) atomic_store(addr, (uintptr_t)0);
+
+        auto * slot = (void (**)(pthread_t, pthread_t))dlsym(RTLD_DEFAULT, "gilwatch_callback");
+        if (slot) *slot = nullptr;
+
+        Py_XDECREF(gilwatch_python_callback);
+        gilwatch_python_callback = nullptr;
+        Py_RETURN_NONE;
+    }
+
+    if (!PyCallable_Check(callback)) {
+        PyErr_SetString(PyExc_TypeError, "callback must be callable or None");
+        return nullptr;
+    }
+
+    auto * addr = (_Atomic uintptr_t *)dlsym(RTLD_DEFAULT, "gilwatch_mutex_address");
+    auto * slot = (void (**)(pthread_t, pthread_t))dlsym(RTLD_DEFAULT, "gilwatch_callback");
+    if (!addr || !slot) {
+        PyErr_SetString(PyExc_RuntimeError,
+            "gilwatch preload library not loaded "
+            "(set DYLD_INSERT_LIBRARIES / LD_PRELOAD to libgilwatch)");
+        return nullptr;
+    }
+
+    pthread_mutex_t * gil_mutex = gilwatch_get_gil_mutex();
+    if (!gil_mutex) {
+        PyErr_SetString(PyExc_RuntimeError, "could not locate the GIL mutex");
+        return nullptr;
+    }
+
+    Py_XDECREF(gilwatch_python_callback);
+    gilwatch_python_callback = Py_NewRef(callback);
+
+    *slot = gilwatch_trampoline;
+    atomic_store(addr, (uintptr_t)gil_mutex);
+
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef module_methods[] = {
     // {"generation_to_collect", (PyCFunction)generation_to_collect, METH_O, "TODO"},
     // {"is_entry_frame", (PyCFunction)print_stack_trace, METH_NOARGS, "TODO"},
@@ -544,7 +610,7 @@ static PyMethodDef module_methods[] = {
     {"set_type_flags", (PyCFunction)set_type_flags, METH_VARARGS, "return type flags as an int"},
     {"noop", (PyCFunction)noop, METH_FASTCALL | METH_KEYWORDS, "TODO"},
     {"raise_exception", (PyCFunction)raise_exception, METH_FASTCALL, "TODO"},
-    // {"set_type", (PyCFunction)set_type, METH_VARARGS | METH_KEYWORDS, "TODO"},
+    {"gilwatch_activate", gilwatch_activate, METH_O, "Activate GIL switch detection with the given callback, or None to deactivate"},
     {NULL, NULL, 0, NULL}  // Sentinel
 };
 
@@ -642,6 +708,7 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::DeallocBridge_Type,
         &retracesoftware::ThreadContextWrapper_Type,
         &retracesoftware::ThreadLocalContext_Type,
+        &retracesoftware::DisabledCallback_Type,
         nullptr
     };
 
@@ -684,6 +751,7 @@ PyMODINIT_FUNC CONCAT(PyInit_, MODULE_NAME)(void) {
         &retracesoftware::Gate_Type,
         &retracesoftware::MemoryAddresses_Type,
         &retracesoftware::ThreadLocal_Type,
+        &retracesoftware::CallCounter_Type,
             NULL
     };
 
