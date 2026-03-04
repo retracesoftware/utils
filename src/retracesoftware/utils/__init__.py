@@ -4,10 +4,12 @@ retracesoftware.utils - Runtime selectable release/debug builds
 Set RETRACE_DEBUG=1 to use the debug build with symbols and assertions.
 """
 import os
+import sys
 import warnings
 import weakref
 import threading
 from collections import UserDict
+from dataclasses import dataclass
 from typing import Any
 from types import ModuleType
 import retracesoftware.functional as functional
@@ -159,5 +161,181 @@ def _chain(*funcs):
 
 _deprecated_local["return_none"] = _return_none
 _deprecated_local["chain"] = _chain
+
+class Demultiplexer2:
+    """Key-based demultiplexer wrapping Dispatcher.
+
+    Provides the same interface as the C++ Demultiplexer but delegates
+    to Dispatcher internally.
+
+    Usage::
+
+        demux = Demultiplexer2(source, key_function)
+        item = demux(key)  # blocks until key_function(item) == key
+    """
+
+    def __init__(self, source, key_function, on_timeout=None, timeout_seconds=5):
+        self._dispatcher = _backend_mod.Dispatcher(source)
+        self._key_function = key_function
+        self._on_timeout = on_timeout
+        self._timeout_seconds = timeout_seconds
+        self._pending_keys = set()
+
+    def __call__(self, key):
+        if key in self._pending_keys:
+            raise ValueError(f"Key {key!r} already in set of pending gets")
+
+        self._pending_keys.add(key)
+        try:
+            return self._dispatcher.next(
+                lambda item, k=key: self._key_function(item) == k
+            )
+        except RuntimeError:
+            if self._on_timeout:
+                return self._on_timeout(self, key)
+            raise
+        finally:
+            self._pending_keys.discard(key)
+
+    @property
+    def pending_keys(self):
+        return tuple(self._pending_keys)
+
+    @property
+    def pending(self):
+        try:
+            return self._dispatcher.buffered
+        except RuntimeError:
+            return None
+
+    @property
+    def waiting_thread_count(self):
+        return self._dispatcher.waiting_thread_count
+
+    @property
+    def source(self):
+        return self._dispatcher.source
+
+    def wait_for_all_pending(self):
+        return self._dispatcher.wait_for_all_pending()
+
+    def interrupt(self, on_waiting_thread, while_interrupted):
+        return self._dispatcher.interrupt(on_waiting_thread, while_interrupted)
+
+
+# ---------------------------------------------------------------------------
+# CallCounter — C extension type for per-frame call-count tracking
+# ---------------------------------------------------------------------------
+
+CallCounter = _backend_mod.CallCounter
+
+_default_call_counter = None
+
+def _get_default_call_counter():
+    global _default_call_counter
+    if _default_call_counter is None:
+        _default_call_counter = CallCounter()
+    return _default_call_counter
+
+def install_call_counter():
+    """Install per-thread call-count tracking hooks."""
+    _get_default_call_counter().install()
+
+def uninstall_call_counter():
+    """Remove call-count tracking hooks and reset the stack."""
+    _get_default_call_counter().uninstall()
+
+def current_call_counts():
+    """Return the current call counts as a tuple of ints."""
+    return _get_default_call_counter().current()
+
+def call_counter_frame_positions():
+    """Return a tuple of f_lasti ints aligned to the call-count stack."""
+    return _get_default_call_counter().frame_positions()
+
+def call_counter_reset():
+    """Clear the call-count stack."""
+    _get_default_call_counter().reset()
+
+def call_counter_position():
+    """Return (call_count, f_lasti) pairs for every frame on the stack."""
+    return _get_default_call_counter().position()
+
+def yield_at_call_counts(callback, thread_id, call_counts):
+    """Arm a one-shot callback for a target thread/call-counts."""
+    _get_default_call_counter().yield_at(callback, thread_id, call_counts)
+
+def call_counter_disable_for(fn):
+    """Return a C wrapper that freezes call-count tracking for the duration of fn."""
+    return _get_default_call_counter().disable_for(fn)
+
+# ---------------------------------------------------------------------------
+# Cursor — immutable data type representing a position in a recorded trace
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Cursor:
+    """A position in a recorded trace.
+
+    ``thread_id``: the OS thread that was executing.
+    ``function_counts``: per-frame call counts from root to leaf.
+    ``f_lasti``: bytecode offset of the top frame, or None for function entry.
+    """
+    thread_id: int
+    function_counts: tuple
+    f_lasti: int | None = None
+
+    def to_dict(self) -> dict:
+        d: dict = {"thread_id": self.thread_id, "function_counts": list(self.function_counts)}
+        if self.f_lasti is not None:
+            d["f_lasti"] = self.f_lasti
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Cursor":
+        return cls(
+            thread_id=d["thread_id"],
+            function_counts=tuple(d["function_counts"]),
+            f_lasti=d.get("f_lasti"),
+        )
+
+def cursor_snapshot() -> Cursor:
+    """Take a snapshot of the current execution position as a Cursor."""
+    counts = current_call_counts()
+    positions = call_counter_frame_positions()
+    return Cursor(
+        thread_id=_thread.get_ident(),
+        function_counts=counts,
+        f_lasti=positions[-1] if positions else None,
+    )
+
+
+# Backward-compat aliases (do NOT override the Cursor dataclass above)
+install_cursor_hooks = install_call_counter
+uninstall_cursor_hooks = uninstall_call_counter
+current_cursor = current_call_counts
+cursor_frame_positions = call_counter_frame_positions
+cursor_reset = call_counter_reset
+cursor_position = call_counter_position
+yield_at_cursor = yield_at_call_counts
+cursor_disable_for = call_counter_disable_for
+
+
+def gilwatch_library_path():
+    """Return the absolute path to the gilwatch preload shared library, or None."""
+    import pathlib
+    ext = '.dylib' if sys.platform == 'darwin' else '.so'
+    lib = pathlib.Path(__file__).parent.parent.parent / ('libgilwatch' + ext)
+    return str(lib) if lib.exists() else None
+
+
+def on_gilswitch(callback):
+    """Register a callback invoked whenever the GIL changes thread.
+
+    Requires libgilwatch to be preloaded (via DYLD_INSERT_LIBRARIES or
+    LD_PRELOAD). Pass None to deactivate.
+    """
+    _backend_mod.gilwatch_activate(callback)
+
 
 __all__ = sorted([k for k in globals().keys() if not k.startswith("_")])
