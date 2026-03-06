@@ -6,7 +6,7 @@
 namespace retracesoftware {
 
 // ---------------------------------------------------------------------------
-// Thread-local and global cursor state (shared by all Cursor instances)
+// Thread-local and global cursor state (shared by all CallCounter instances)
 // ---------------------------------------------------------------------------
 
 struct CursorEntry {
@@ -14,37 +14,43 @@ struct CursorEntry {
 };
 
 static thread_local std::vector<CursorEntry> cursor_stack;
-
-static PyObject *yield_at_callback = nullptr;
-static unsigned long yield_at_thread_id = 0;
-static std::vector<int> yield_at_target;
-static size_t yield_at_match_prefix = 0;
-static bool yield_at_armed = false;
-
-static thread_local void *root_parent_frame = nullptr;
-static thread_local int root_parent_lasti = -1;
-static thread_local int root_repeat_count = 0;
-static thread_local bool root_parent_valid = false;
-
 static thread_local int suspend_depth = 0;
-static thread_local _PyInterpreterFrame *suspended_frame = nullptr;
+
+// ---------------------------------------------------------------------------
+// CallbackSlot — generic one-shot callback armed against a call-count target
+// ---------------------------------------------------------------------------
+
+struct CallbackSlot {
+    PyObject *callback = nullptr;
+    unsigned long thread_id = 0;
+    std::vector<int> target;
+    bool armed = false;
+};
 
 static void
-disarm_yield_at()
+disarm_slot(CallbackSlot &s)
 {
-    yield_at_armed = false;
-    yield_at_match_prefix = 0;
-    yield_at_target.clear();
-    Py_CLEAR(yield_at_callback);
+    s.armed = false;
+    s.target.clear();
+    Py_CLEAR(s.callback);
+}
+
+static void
+arm_slot(CallbackSlot &s, PyObject *cb, unsigned long tid,
+         const std::vector<int> &tgt)
+{
+    Py_XDECREF(s.callback);
+    s.callback = Py_NewRef(cb);
+    s.thread_id = tid;
+    s.target = tgt;
+    s.armed = true;
 }
 
 static int
-yield_pending_call(void *arg)
+fire_slot_pending(void *arg)
 {
-    (void)arg;
-    PyObject *cb = yield_at_callback;
+    PyObject *cb = (PyObject *)arg;
     if (!cb) return 0;
-    yield_at_callback = nullptr;
     PyObject *result = PyObject_CallNoArgs(cb);
     Py_DECREF(cb);
     if (!result) {
@@ -56,34 +62,92 @@ yield_pending_call(void *arg)
 }
 
 static void
-maybe_fire_yield_at()
+maybe_fire_slot(CallbackSlot &s)
 {
-    if (!yield_at_armed || !yield_at_callback) return;
-    if (PyThread_get_thread_ident() != yield_at_thread_id) return;
+    if (suspend_depth > 0) return;
+    if (!s.armed || !s.callback) return;
+    if (PyThread_get_thread_ident() != s.thread_id) return;
+    const size_t n = cursor_stack.size();
+    if (n != s.target.size()) return;
+    for (size_t i = 0; i < n; i++) {
+        if (cursor_stack[i].call_count != s.target[i]) return;
+    }
+    PyObject *cb = s.callback;
+    s.callback = nullptr;
+    s.armed = false;
+    s.target.clear();
+    Py_AddPendingCall(fire_slot_pending, (void *)cb);
+}
 
-    const size_t target_size = yield_at_target.size();
+// ---------------------------------------------------------------------------
+// Four callback slots
+// ---------------------------------------------------------------------------
+
+// on_start uses prefix matching for early disarm
+static CallbackSlot start_slot;
+static size_t start_match_prefix = 0;
+
+static CallbackSlot return_slot;
+static CallbackSlot unwind_slot;
+static CallbackSlot backjump_slot;
+
+static void
+disarm_start()
+{
+    disarm_slot(start_slot);
+    start_match_prefix = 0;
+}
+
+static void
+arm_start(PyObject *cb, unsigned long tid, const std::vector<int> &tgt)
+{
+    arm_slot(start_slot, cb, tid, tgt);
+    start_match_prefix = 0;
+}
+
+static void
+maybe_fire_start()
+{
+    if (suspend_depth > 0) return;
+    if (!start_slot.armed || !start_slot.callback) return;
+    if (PyThread_get_thread_ident() != start_slot.thread_id) return;
+
+    const size_t target_size = start_slot.target.size();
     const size_t n = cursor_stack.size();
     if (n < target_size) return;
 
-    while (yield_at_match_prefix < target_size) {
-        const size_t i = yield_at_match_prefix;
+    while (start_match_prefix < target_size) {
+        const size_t i = start_match_prefix;
         const int cur = cursor_stack[i].call_count;
-        const int tgt = yield_at_target[i];
+        const int tgt = start_slot.target[i];
         if (cur < tgt) return;
         if (cur > tgt) {
-            disarm_yield_at();
+            disarm_start();
             return;
         }
-        yield_at_match_prefix++;
+        start_match_prefix++;
     }
 
     if (n != target_size) return;
 
-    yield_at_armed = false;
-    yield_at_match_prefix = 0;
-    yield_at_target.clear();
-    Py_AddPendingCall(yield_pending_call, nullptr);
+    PyObject *cb = start_slot.callback;
+    start_slot.callback = nullptr;
+    start_slot.armed = false;
+    start_slot.target.clear();
+    start_match_prefix = 0;
+    Py_AddPendingCall(fire_slot_pending, (void *)cb);
 }
+
+// ---------------------------------------------------------------------------
+// Root parent state
+// ---------------------------------------------------------------------------
+
+static thread_local void *root_parent_frame = nullptr;
+static thread_local int root_parent_lasti = -1;
+static thread_local int root_repeat_count = 0;
+static thread_local bool root_parent_valid = false;
+
+static thread_local _PyInterpreterFrame *suspended_frame = nullptr;
 
 // ---------------------------------------------------------------------------
 // sys.monitoring callbacks (module-level PyCFunctions for registration)
@@ -121,7 +185,7 @@ on_py_start(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
         }
     }
     cursor_stack.push_back({new_count});
-    maybe_fire_yield_at();
+    maybe_fire_start();
     Py_RETURN_NONE;
 }
 
@@ -130,10 +194,11 @@ on_py_return(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
 {
     if (suspend_depth > 0) Py_RETURN_NONE;
 
+    maybe_fire_slot(return_slot);
     if (!cursor_stack.empty()) {
         cursor_stack.pop_back();
     }
-    maybe_fire_yield_at();
+    maybe_fire_start();
     Py_RETURN_NONE;
 }
 
@@ -142,10 +207,30 @@ on_py_unwind(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
 {
     if (suspend_depth > 0) Py_RETURN_NONE;
 
+    maybe_fire_slot(unwind_slot);
     if (!cursor_stack.empty()) {
         cursor_stack.pop_back();
     }
-    maybe_fire_yield_at();
+    maybe_fire_start();
+    Py_RETURN_NONE;
+}
+
+static PyObject *
+on_py_jump(PyObject *self, PyObject *const *args, Py_ssize_t nargs)
+{
+    if (suspend_depth > 0) Py_RETURN_NONE;
+    if (!backjump_slot.armed || !backjump_slot.callback) Py_RETURN_NONE;
+    if (nargs < 3) Py_RETURN_NONE;
+
+    long src = PyLong_AsLong(args[1]);
+    long dst = PyLong_AsLong(args[2]);
+    if ((src == -1 || dst == -1) && PyErr_Occurred()) {
+        PyErr_Clear();
+        Py_RETURN_NONE;
+    }
+    if (dst < src) {
+        maybe_fire_slot(backjump_slot);
+    }
     Py_RETURN_NONE;
 }
 
@@ -233,7 +318,10 @@ reset_cursor_state()
     root_repeat_count = 0;
     suspend_depth = 0;
     suspended_frame = nullptr;
-    disarm_yield_at();
+    disarm_start();
+    disarm_slot(return_slot);
+    disarm_slot(unwind_slot);
+    disarm_slot(backjump_slot);
 }
 
 // ---------------------------------------------------------------------------
@@ -301,11 +389,15 @@ eval_frame(PyThreadState *tstate,
 
     int new_count = cursor_stack.empty() ? root_repeat_count : 0;
     cursor_stack.push_back({new_count});
-    maybe_fire_yield_at();
+    maybe_fire_start();
     PyObject *result = real_eval(tstate, frame, throw_flag);
+    if (result)
+        maybe_fire_slot(return_slot);
+    else
+        maybe_fire_slot(unwind_slot);
     if (!cursor_stack.empty())
         cursor_stack.pop_back();
-    maybe_fire_yield_at();
+    maybe_fire_start();
 
     return result;
 }
@@ -368,15 +460,17 @@ PyTypeObject DisabledCallback_Type = {
 
 struct CallCounter : public PyObject {
     int tool_id;
-    PyObject *start_cb;
-    PyObject *return_cb;
-    PyObject *unwind_cb;
+    PyObject *mon_start_cb;
+    PyObject *mon_return_cb;
+    PyObject *mon_unwind_cb;
+    PyObject *mon_jump_cb;
 
     static int init(CallCounter *self, PyObject *args, PyObject *kwds) {
         self->tool_id = CURSOR_NOT_INSTALLED;
-        self->start_cb = nullptr;
-        self->return_cb = nullptr;
-        self->unwind_cb = nullptr;
+        self->mon_start_cb = nullptr;
+        self->mon_return_cb = nullptr;
+        self->mon_unwind_cb = nullptr;
+        self->mon_jump_cb = nullptr;
         return 0;
     }
 
@@ -386,9 +480,10 @@ struct CallCounter : public PyObject {
             Py_XDECREF(r);
             if (PyErr_Occurred()) PyErr_Clear();
         }
-        Py_XDECREF(self->start_cb);
-        Py_XDECREF(self->return_cb);
-        Py_XDECREF(self->unwind_cb);
+        Py_XDECREF(self->mon_start_cb);
+        Py_XDECREF(self->mon_return_cb);
+        Py_XDECREF(self->mon_unwind_cb);
+        Py_XDECREF(self->mon_jump_cb);
         Py_TYPE(self)->tp_free((PyObject *)self);
     }
 
@@ -421,17 +516,21 @@ struct CallCounter : public PyObject {
             return nullptr;
         }
 
-        static PyMethodDef start_def = {"_cursor_on_py_start", (PyCFunction)on_py_start, METH_FASTCALL, nullptr};
-        static PyMethodDef return_def = {"_cursor_on_py_return", (PyCFunction)on_py_return, METH_FASTCALL, nullptr};
-        static PyMethodDef unwind_def = {"_cursor_on_py_unwind", (PyCFunction)on_py_unwind, METH_FASTCALL, nullptr};
+        static PyMethodDef start_def  = {"_cc_py_start",  (PyCFunction)on_py_start,  METH_FASTCALL, nullptr};
+        static PyMethodDef return_def = {"_cc_py_return", (PyCFunction)on_py_return, METH_FASTCALL, nullptr};
+        static PyMethodDef unwind_def = {"_cc_py_unwind", (PyCFunction)on_py_unwind, METH_FASTCALL, nullptr};
+        static PyMethodDef jump_def   = {"_cc_py_jump",   (PyCFunction)on_py_jump,   METH_FASTCALL, nullptr};
 
-        Py_XDECREF(self->start_cb);
-        Py_XDECREF(self->return_cb);
-        Py_XDECREF(self->unwind_cb);
-        self->start_cb = PyCFunction_New(&start_def, Py_None);
-        self->return_cb = PyCFunction_New(&return_def, Py_None);
-        self->unwind_cb = PyCFunction_New(&unwind_def, Py_None);
-        if (!self->start_cb || !self->return_cb || !self->unwind_cb) {
+        Py_XDECREF(self->mon_start_cb);
+        Py_XDECREF(self->mon_return_cb);
+        Py_XDECREF(self->mon_unwind_cb);
+        Py_XDECREF(self->mon_jump_cb);
+        self->mon_start_cb  = PyCFunction_New(&start_def, Py_None);
+        self->mon_return_cb = PyCFunction_New(&return_def, Py_None);
+        self->mon_unwind_cb = PyCFunction_New(&unwind_def, Py_None);
+        self->mon_jump_cb   = PyCFunction_New(&jump_def, Py_None);
+        if (!self->mon_start_cb || !self->mon_return_cb ||
+            !self->mon_unwind_cb || !self->mon_jump_cb) {
             Py_DECREF(monitoring);
             return nullptr;
         }
@@ -439,43 +538,64 @@ struct CallCounter : public PyObject {
         PyObject *events_ns = PyObject_GetAttrString(monitoring, "events");
         if (!events_ns) { Py_DECREF(monitoring); return nullptr; }
 
-        PyObject *ev_start = PyObject_GetAttrString(events_ns, "PY_START");
+        PyObject *ev_start  = PyObject_GetAttrString(events_ns, "PY_START");
         PyObject *ev_return = PyObject_GetAttrString(events_ns, "PY_RETURN");
         PyObject *ev_unwind = PyObject_GetAttrString(events_ns, "PY_UNWIND");
+        PyObject *ev_jump   = PyObject_GetAttrString(events_ns, "JUMP");
         Py_DECREF(events_ns);
         if (!ev_start || !ev_return || !ev_unwind) {
             Py_XDECREF(ev_start); Py_XDECREF(ev_return); Py_XDECREF(ev_unwind);
+            Py_XDECREF(ev_jump);
             Py_DECREF(monitoring);
             return nullptr;
         }
+        if (!ev_jump) PyErr_Clear();
 
         long vs = PyLong_AsLong(ev_start);
         long vr = PyLong_AsLong(ev_return);
         long vu = PyLong_AsLong(ev_unwind);
+        long vj = ev_jump ? PyLong_AsLong(ev_jump) : 0;
 
         PyObject *r;
-        r = PyObject_CallMethod(monitoring, "register_callback", "iOO", tid, ev_start, self->start_cb);
-        if (!r) { Py_DECREF(ev_start); Py_DECREF(ev_return); Py_DECREF(ev_unwind); Py_DECREF(monitoring); return nullptr; }
+        r = PyObject_CallMethod(monitoring, "register_callback", "iOO", tid, ev_start, self->mon_start_cb);
+        if (!r) goto fail_events;
         Py_DECREF(r);
 
-        r = PyObject_CallMethod(monitoring, "register_callback", "iOO", tid, ev_return, self->return_cb);
-        if (!r) { Py_DECREF(ev_start); Py_DECREF(ev_return); Py_DECREF(ev_unwind); Py_DECREF(monitoring); return nullptr; }
+        r = PyObject_CallMethod(monitoring, "register_callback", "iOO", tid, ev_return, self->mon_return_cb);
+        if (!r) goto fail_events;
         Py_DECREF(r);
 
-        r = PyObject_CallMethod(monitoring, "register_callback", "iOO", tid, ev_unwind, self->unwind_cb);
-        if (!r) { Py_DECREF(ev_start); Py_DECREF(ev_return); Py_DECREF(ev_unwind); Py_DECREF(monitoring); return nullptr; }
+        r = PyObject_CallMethod(monitoring, "register_callback", "iOO", tid, ev_unwind, self->mon_unwind_cb);
+        if (!r) goto fail_events;
         Py_DECREF(r);
 
-        r = PyObject_CallMethod(monitoring, "set_events", "il", tid, vs | vr | vu);
-        if (!r) { Py_DECREF(ev_start); Py_DECREF(ev_return); Py_DECREF(ev_unwind); Py_DECREF(monitoring); return nullptr; }
+        if (ev_jump) {
+            r = PyObject_CallMethod(monitoring, "register_callback", "iOO", tid, ev_jump, self->mon_jump_cb);
+            if (!r) goto fail_events;
+            Py_DECREF(r);
+        }
+
+        r = PyObject_CallMethod(monitoring, "set_events", "il", tid, vs | vr | vu | vj);
+        if (!r) goto fail_events;
         Py_DECREF(r);
 
         Py_DECREF(ev_start);
         Py_DECREF(ev_return);
         Py_DECREF(ev_unwind);
+        Py_XDECREF(ev_jump);
         Py_DECREF(monitoring);
 
         self->tool_id = tid;
+        reset_cursor_state();
+        Py_RETURN_NONE;
+
+    fail_events:
+        Py_DECREF(ev_start);
+        Py_DECREF(ev_return);
+        Py_DECREF(ev_unwind);
+        Py_XDECREF(ev_jump);
+        Py_DECREF(monitoring);
+        return nullptr;
 
 #elif PY_VERSION_HEX >= 0x030B0000
         if (!real_eval) {
@@ -511,10 +631,12 @@ struct CallCounter : public PyObject {
             PyObject *events_ns = PyObject_GetAttrString(monitoring, "events");
             if (!events_ns) { Py_DECREF(monitoring); return nullptr; }
 
-            PyObject *ev_start = PyObject_GetAttrString(events_ns, "PY_START");
+            PyObject *ev_start  = PyObject_GetAttrString(events_ns, "PY_START");
             PyObject *ev_return = PyObject_GetAttrString(events_ns, "PY_RETURN");
             PyObject *ev_unwind = PyObject_GetAttrString(events_ns, "PY_UNWIND");
+            PyObject *ev_jump   = PyObject_GetAttrString(events_ns, "JUMP");
             Py_DECREF(events_ns);
+            if (!ev_jump) PyErr_Clear();
 
             PyObject *r;
             r = PyObject_CallMethod(monitoring, "set_events", "ii", self->tool_id, 0);
@@ -532,6 +654,10 @@ struct CallCounter : public PyObject {
                 r = PyObject_CallMethod(monitoring, "register_callback", "iOO", self->tool_id, ev_unwind, Py_None);
                 Py_XDECREF(r);
             }
+            if (ev_jump) {
+                r = PyObject_CallMethod(monitoring, "register_callback", "iOO", self->tool_id, ev_jump, Py_None);
+                Py_XDECREF(r);
+            }
 
             r = PyObject_CallMethod(monitoring, "free_tool_id", "i", self->tool_id);
             Py_XDECREF(r);
@@ -539,11 +665,13 @@ struct CallCounter : public PyObject {
             Py_XDECREF(ev_start);
             Py_XDECREF(ev_return);
             Py_XDECREF(ev_unwind);
+            Py_XDECREF(ev_jump);
             Py_DECREF(monitoring);
 
-            Py_CLEAR(self->start_cb);
-            Py_CLEAR(self->return_cb);
-            Py_CLEAR(self->unwind_cb);
+            Py_CLEAR(self->mon_start_cb);
+            Py_CLEAR(self->mon_return_cb);
+            Py_CLEAR(self->mon_unwind_cb);
+            Py_CLEAR(self->mon_jump_cb);
         }
 #endif
 
@@ -609,50 +737,125 @@ struct CallCounter : public PyObject {
         return result;
     }
 
-    // -- yield_at ---------------------------------------------------------
+    // -- watch (unified callback registration) ----------------------------
+    //
+    //   watch(thread_id, call_counts, *,
+    //         on_start=None, on_return=None,
+    //         on_unwind=None, on_backjump=None)
 
-    static PyObject *yield_at_impl(CallCounter *self, PyObject *const *args, Py_ssize_t nargs) {
-        if (nargs != 3) {
-            PyErr_SetString(PyExc_TypeError, "yield_at expects (callback, thread_id, cursor)");
+    static PyObject *watch_impl(CallCounter *self,
+                                PyObject *const *args, Py_ssize_t nargs,
+                                PyObject *kwnames)
+    {
+        if (nargs != 2) {
+            PyErr_SetString(PyExc_TypeError,
+                "watch() requires exactly 2 positional arguments: "
+                "thread_id and call_counts");
             return nullptr;
         }
 
-        PyObject *callback = args[0];
-        if (!PyCallable_Check(callback)) {
-            PyErr_SetString(PyExc_TypeError, "callback must be callable");
-            return nullptr;
-        }
-
-        unsigned long thread_id = PyLong_AsUnsignedLong(args[1]);
+        unsigned long thread_id = PyLong_AsUnsignedLong(args[0]);
         if (thread_id == (unsigned long)-1 && PyErr_Occurred())
             return nullptr;
 
-        PyObject *cursor = args[2];
-        if (!PyTuple_Check(cursor)) {
-            PyErr_SetString(PyExc_TypeError, "cursor must be a tuple of ints");
+        PyObject *counts = args[1];
+        if (!PyTuple_Check(counts)) {
+            PyErr_SetString(PyExc_TypeError, "call_counts must be a tuple of ints");
             return nullptr;
         }
-
         std::vector<int> target;
-        target.reserve((size_t)PyTuple_GET_SIZE(cursor));
-        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(cursor); i++) {
-            PyObject *item = PyTuple_GET_ITEM(cursor, i);
-            long value = PyLong_AsLong(item);
+        target.reserve((size_t)PyTuple_GET_SIZE(counts));
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(counts); i++) {
+            long value = PyLong_AsLong(PyTuple_GET_ITEM(counts, i));
             if (value == -1 && PyErr_Occurred()) {
-                PyErr_SetString(PyExc_TypeError, "cursor must be a tuple of ints");
+                PyErr_SetString(PyExc_TypeError, "call_counts must be a tuple of ints");
                 return nullptr;
             }
             target.push_back((int)value);
         }
 
-        Py_XDECREF(yield_at_callback);
-        yield_at_callback = Py_NewRef(callback);
-        yield_at_thread_id = thread_id;
-        yield_at_target = std::move(target);
-        yield_at_match_prefix = 0;
-        yield_at_armed = true;
+        PyObject *kw_start    = nullptr;
+        PyObject *kw_return   = nullptr;
+        PyObject *kw_unwind   = nullptr;
+        PyObject *kw_backjump = nullptr;
 
-        maybe_fire_yield_at();
+        if (kwnames) {
+            Py_ssize_t nkw = PyTuple_GET_SIZE(kwnames);
+            for (Py_ssize_t i = 0; i < nkw; i++) {
+                PyObject *key = PyTuple_GET_ITEM(kwnames, i);
+                PyObject *val = args[nargs + i];
+                if (PyUnicode_CompareWithASCIIString(key, "on_start") == 0)
+                    kw_start = val;
+                else if (PyUnicode_CompareWithASCIIString(key, "on_return") == 0)
+                    kw_return = val;
+                else if (PyUnicode_CompareWithASCIIString(key, "on_unwind") == 0)
+                    kw_unwind = val;
+                else if (PyUnicode_CompareWithASCIIString(key, "on_backjump") == 0)
+                    kw_backjump = val;
+                else {
+                    PyErr_Format(PyExc_TypeError,
+                        "watch() got unexpected keyword argument '%U'", key);
+                    return nullptr;
+                }
+            }
+        }
+
+        #define VALIDATE_CB(var, name) \
+            if (var && var != Py_None && !PyCallable_Check(var)) { \
+                PyErr_SetString(PyExc_TypeError, name " must be callable"); \
+                return nullptr; \
+            }
+        VALIDATE_CB(kw_start,    "on_start")
+        VALIDATE_CB(kw_return,   "on_return")
+        VALIDATE_CB(kw_unwind,   "on_unwind")
+        VALIDATE_CB(kw_backjump, "on_backjump")
+        #undef VALIDATE_CB
+
+        if (kw_start && kw_start != Py_None)
+            arm_start(kw_start, thread_id, target);
+        if (kw_return && kw_return != Py_None)
+            arm_slot(return_slot, kw_return, thread_id, target);
+        if (kw_unwind && kw_unwind != Py_None)
+            arm_slot(unwind_slot, kw_unwind, thread_id, target);
+        if (kw_backjump && kw_backjump != Py_None)
+            arm_slot(backjump_slot, kw_backjump, thread_id, target);
+
+        if (start_slot.armed) maybe_fire_start();
+        Py_RETURN_NONE;
+    }
+
+    // -- yield_at (backward compat, delegates to on_start) ----------------
+
+    static PyObject *yield_at_impl(CallCounter *self, PyObject *const *args, Py_ssize_t nargs) {
+        if (nargs != 3) {
+            PyErr_SetString(PyExc_TypeError, "yield_at expects (callback, thread_id, call_counts)");
+            return nullptr;
+        }
+        PyObject *callback = args[0];
+        if (!PyCallable_Check(callback)) {
+            PyErr_SetString(PyExc_TypeError, "callback must be callable");
+            return nullptr;
+        }
+        unsigned long thread_id = PyLong_AsUnsignedLong(args[1]);
+        if (thread_id == (unsigned long)-1 && PyErr_Occurred())
+            return nullptr;
+        PyObject *counts = args[2];
+        if (!PyTuple_Check(counts)) {
+            PyErr_SetString(PyExc_TypeError, "call_counts must be a tuple of ints");
+            return nullptr;
+        }
+        std::vector<int> target;
+        target.reserve((size_t)PyTuple_GET_SIZE(counts));
+        for (Py_ssize_t i = 0; i < PyTuple_GET_SIZE(counts); i++) {
+            long value = PyLong_AsLong(PyTuple_GET_ITEM(counts, i));
+            if (value == -1 && PyErr_Occurred()) {
+                PyErr_SetString(PyExc_TypeError, "call_counts must be a tuple of ints");
+                return nullptr;
+            }
+            target.push_back((int)value);
+        }
+        arm_start(callback, thread_id, target);
+        maybe_fire_start();
         Py_RETURN_NONE;
     }
 
@@ -679,6 +882,10 @@ struct CallCounter : public PyObject {
 
     static PyObject *get_depth(CallCounter *self, void *) {
         return PyLong_FromSsize_t((Py_ssize_t)cursor_stack.size());
+    }
+
+    static PyObject *get_tool_id(CallCounter *self, void *) {
+        return PyLong_FromLong(self->tool_id);
     }
 
     // -- context manager --------------------------------------------------
@@ -726,7 +933,11 @@ static PyMethodDef CallCounter_methods[] = {
     {"current",          (PyCFunction)CallCounter::current_impl,          METH_NOARGS,   "Return the current call counts as a tuple of ints"},
     {"frame_positions",  (PyCFunction)CallCounter::frame_positions_impl,  METH_NOARGS,   "Return a tuple of f_lasti ints aligned to the call-count stack"},
     {"position",         (PyCFunction)CallCounter::position_impl,         METH_NOARGS,   "Return tuple of (call_count, f_lasti) pairs"},
-    {"yield_at",         (PyCFunction)CallCounter::yield_at_impl,         METH_FASTCALL, "Arm a one-shot callback for a target thread/call-counts"},
+    {"watch",            (PyCFunction)(void(*)(void))CallCounter::watch_impl,
+                         METH_FASTCALL | METH_KEYWORDS,
+                         "watch(thread_id, call_counts, *, on_start=None, on_return=None, on_unwind=None, on_backjump=None)\n"
+                         "Arm one-shot callbacks for a target thread/call-counts position."},
+    {"yield_at",         (PyCFunction)CallCounter::yield_at_impl,         METH_FASTCALL, "Arm a one-shot start callback (backward compat alias)"},
     {"disable_for",      (PyCFunction)CallCounter::disable_for_impl,      METH_O,        "Return a C wrapper that freezes call-count tracking for the duration of the call"},
     {"__enter__",        (PyCFunction)CallCounter::enter_impl,            METH_NOARGS,   nullptr},
     {"__exit__",         (PyCFunction)CallCounter::exit_impl,             METH_FASTCALL, nullptr},
@@ -736,6 +947,7 @@ static PyMethodDef CallCounter_methods[] = {
 static PyGetSetDef CallCounter_getset[] = {
     {"installed", (getter)CallCounter::get_installed, nullptr, "True if hooks are currently installed", nullptr},
     {"depth",     (getter)CallCounter::get_depth,     nullptr, "Current call-count stack depth", nullptr},
+    {"tool_id",   (getter)CallCounter::get_tool_id,   nullptr, "sys.monitoring tool ID (-1 if not installed)", nullptr},
     {nullptr}
 };
 

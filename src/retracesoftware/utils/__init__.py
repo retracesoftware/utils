@@ -5,6 +5,8 @@ Set RETRACE_DEBUG=1 to use the debug build with symbols and assertions.
 """
 import os
 import sys
+
+__path__ = [os.path.dirname(os.path.abspath(__file__))]
 import warnings
 import weakref
 import threading
@@ -269,6 +271,24 @@ def call_counter_disable_for(fn):
     """Return a C wrapper that freezes call-count tracking for the duration of fn."""
     return _get_default_call_counter().disable_for(fn)
 
+def watch(thread_id, call_counts, *, on_start=None, on_return=None,
+          on_unwind=None, on_backjump=None):
+    """Arm one-shot callbacks for a target thread/call-counts position.
+
+    Each provided callback fires once when the matching event occurs for
+    the given call-count path on the specified thread.
+
+    ``on_start``    — function entry (PY_START)
+    ``on_return``   — normal return (PY_RETURN)
+    ``on_unwind``   — exception unwind (PY_UNWIND)
+    ``on_backjump`` — backward jump, e.g. loop iteration (JUMP)
+    """
+    _get_default_call_counter().watch(
+        thread_id, call_counts,
+        on_start=on_start, on_return=on_return,
+        on_unwind=on_unwind, on_backjump=on_backjump,
+    )
+
 # ---------------------------------------------------------------------------
 # Cursor — immutable data type representing a position in a recorded trace
 # ---------------------------------------------------------------------------
@@ -310,6 +330,68 @@ def cursor_snapshot() -> Cursor:
     )
 
 
+def _yield_at_cursor_impl(thread_id, counters, f_lasti, callback):
+    cc = _get_default_call_counter()
+
+    if f_lasti is None:
+        cc.watch(thread_id, counters, on_start=callback)
+        return
+
+    def _phase2():
+        frame = sys._getframe(1)
+        code = frame.f_code
+        tool_id = cc.tool_id
+        target = f_lasti
+
+        if frame.f_lasti >= target:
+            callback()
+            return
+
+        def _on_instruction(code_obj, offset):
+            if offset == target:
+                sys.monitoring.set_local_events(tool_id, code, 0)
+                callback()
+            return sys.monitoring.DISABLE
+
+        sys.monitoring.register_callback(
+            tool_id, sys.monitoring.events.INSTRUCTION,
+            cc.disable_for(_on_instruction),
+        )
+        sys.monitoring.set_local_events(
+            tool_id, code, sys.monitoring.events.INSTRUCTION,
+        )
+
+    wrapped = cc.disable_for(_phase2)
+    cc.watch(thread_id, counters, on_return=wrapped, on_unwind=wrapped)
+
+
+_yield_at_cursor_wrapped = None
+
+def yield_at_cursor(thread_id, counters, f_lasti, callback):
+    """Yield at a precise cursor position using a two-phase approach.
+
+    If *f_lasti* is ``None``, arms *callback* via ``on_start`` for
+    *counters* directly (the function-entry case).
+
+    Otherwise uses *counters* to identify a child function invocation and
+    *f_lasti* as the bytecode offset in the **parent frame** where we
+    need to stop:
+
+    Phase 1 — ``watch(on_return/on_unwind)`` waits for the child at
+    *counters* to finish so the parent frame becomes active.
+
+    Phase 2 — enables per-code-object ``INSTRUCTION`` monitoring on the
+    parent frame and fires *callback* when ``instruction_offset == f_lasti``.
+
+    The function itself is wrapped with ``disable_for`` so it does not
+    perturb the call-count stack.
+    """
+    global _yield_at_cursor_wrapped
+    if _yield_at_cursor_wrapped is None:
+        _yield_at_cursor_wrapped = call_counter_disable_for(_yield_at_cursor_impl)
+    _yield_at_cursor_wrapped(thread_id, counters, f_lasti, callback)
+
+
 # Backward-compat aliases (do NOT override the Cursor dataclass above)
 install_cursor_hooks = install_call_counter
 uninstall_cursor_hooks = uninstall_call_counter
@@ -317,7 +399,6 @@ current_cursor = current_call_counts
 cursor_frame_positions = call_counter_frame_positions
 cursor_reset = call_counter_reset
 cursor_position = call_counter_position
-yield_at_cursor = yield_at_call_counts
 cursor_disable_for = call_counter_disable_for
 
 
@@ -337,5 +418,7 @@ def on_gilswitch(callback):
     """
     _backend_mod.gilwatch_activate(callback)
 
+
+from .trace import trace_function_instructions, TargetUnreachableError, InstructionMonitor
 
 __all__ = sorted([k for k in globals().keys() if not k.startswith("_")])
