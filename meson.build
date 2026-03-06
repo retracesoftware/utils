@@ -11,7 +11,12 @@ rs_extension_name = '_retracesoftware_utils'
 rs_cpp_source_dir = 'cpp'
 rs_ext_install_subdir = ''
 rs_extra_sources = files('cpp/generation.c', 'cpp/gilwatch_activate.c')
-rs_py_sources = ['src/retracesoftware/utils/__init__.py']
+rs_py_sources = [
+  'src/retracesoftware/utils/__init__.py',
+  'src/retracesoftware/utils/breakpoint.py',
+  'src/retracesoftware/utils/threadcontext.py',
+  'src/retracesoftware/utils/trace.py',
+]
 rs_py_install_subdir = 'retracesoftware/utils'
 
 # Include shared build logic (builds release/debug modules)
